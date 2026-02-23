@@ -183,7 +183,7 @@ st.subheader("Review volume and rating trends over time")
 time_series = (
     filtered.dropna(subset=["published_date"])
     .set_index("published_date")
-    .resample("M")
+    .resample("ME")
     .agg(
         review_count=("rating", "size"),
         avg_rating=("rating", "mean"),
