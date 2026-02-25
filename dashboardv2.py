@@ -188,15 +188,19 @@ def generate_ai_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: str
     """Generate AI-powered insight using Groq API (cloud-compatible) or Ollama (local fallback)."""
     import os
     
-    # Generate data summary
+    # Generate data summary (limit to top 10 items to avoid token limits)
     if y_col == "(count)":
         summary = f"Review frequency by {x_col}"
-        data_desc = df.groupby(x_col, dropna=True).size().to_dict()
+        grouped = df.groupby(x_col, dropna=True).size().sort_values(ascending=False)
     else:
         summary = f"{agg_label.capitalize()} of {y_col} by {x_col}"
-        data_desc = df.groupby(x_col, dropna=True)[y_col].agg(agg_label).to_dict()
+        grouped = df.groupby(x_col, dropna=True)[y_col].agg(agg_label).sort_values(ascending=False)
     
-    prompt = f"Based on this data: {data_desc}. Provide ONE concise business insight (1-2 sentences) about '{summary}' in Singapore Airlines reviews. Be specific and actionable."
+    # Limit to top 10 items to keep prompt small
+    data_desc = grouped.head(10).to_dict()
+    
+    # Shorter, simpler prompt to reduce token count
+    prompt = f"Data: {data_desc}. One insight about '{summary}' in airline reviews (1-2 sentences)."
     
     # Check for Groq API (cloud-compatible)
     groq_api_key = os.environ.get("GROQ_API_KEY")
@@ -210,21 +214,35 @@ def _generate_groq_insight(prompt: str, api_key: str) -> str:
     """Generate insight using Groq API."""
     try:
         from groq import Groq
-    except ImportError:
-        return "💡 **AI Insight:** Install groq library to enable Groq insights (pip install groq)."
+    except ImportError as e:
+        # More detailed error message for debugging
+        import sys
+        return f"💡 **AI Insight:** Groq not found. Paths checked: {sys.path[-3:]}. Error: {str(e)}"
     
     try:
+        # Validate API key format
+        if not api_key or not api_key.startswith("gsk_"):
+            return "💡 **AI Insight:** Invalid Groq API key format. Key should start with 'gsk_'."
+        
         client = Groq(api_key=api_key)
+        
+        # Ensure prompt is not empty
+        if not prompt or len(prompt.strip()) == 0:
+            return "💡 **AI Insight:** Empty prompt provided."
+        
         message = client.chat.completions.create(
             messages=[
                 {"role": "user", "content": prompt}
             ],
-            model="mixtral-8x7b-32768",  # Free tier model
-            max_tokens=150,
+            model="llama-3.1-8b-instant",  # Fast, free tier model
+            max_tokens=100,  # Reduced to avoid token limits
         )
-        return f"🤖 **AI Insight:** {message.choices[0].message.content.strip()}"
+        insight_text = message.choices[0].message.content.strip()
+        return f"🤖 **AI Insight (Groq):** {insight_text}"
     except Exception as e:
-        return f"💡 **AI Insight:** Groq error ({str(e)[:40]}). Check API key."
+        error_msg = str(e)
+        # Show more of the error for debugging
+        return f"💡 **AI Insight:** Groq error. {error_msg[:100]} Contact support or check API key."
 
 def _generate_ollama_insight(prompt: str) -> str:
     """Generate insight using Ollama (local only)."""
@@ -253,7 +271,8 @@ def _generate_ollama_insight(prompt: str) -> str:
         
         if response.status_code == 200:
             result = response.json()
-            return f"🤖 **AI Insight:** {result.get('response', 'No insight generated').strip()}"
+            insight_text = result.get('response', 'No insight generated').strip()
+            return f"🤖 **AI Insight (Ollama):** {insight_text}"
         else:
             return "💡 **AI Insight:** Ollama API error. Ensure Ollama is running: `ollama serve`"
     
