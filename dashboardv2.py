@@ -2,7 +2,34 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 
-st.set_page_config(page_title="SIA Review Pulse", page_icon="SIA", layout="wide")
+st.set_page_config(page_title="Self‑Service Data Hub", page_icon="SIA", layout="wide")
+
+# Global font styling (Streamlit UI)
+st.markdown(
+    """
+    <style>
+        html, body, [class*="css"] {
+            font-family: Arial, sans-serif;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Global font styling (Altair charts)
+def _altair_arial_theme():
+    return {
+        "config": {
+            "font": "Arial",
+            "title": {"font": "Arial"},
+            "axis": {"labelFont": "Arial", "titleFont": "Arial"},
+            "legend": {"labelFont": "Arial", "titleFont": "Arial"},
+            "header": {"labelFont": "Arial", "titleFont": "Arial"},
+        }
+    }
+
+alt.themes.register("arial_theme", _altair_arial_theme)
+alt.themes.enable("arial_theme")
 
 REQUIRED_COLUMNS = {
     "published_date",
@@ -85,7 +112,7 @@ def render_wordcloud(text_series, stopwords, title):
     st.write(title)
     st.image(wc.to_array(), use_container_width=True)
 
-st.title("SIA Review Pulse")
+st.title("Self‑Service Data Hub: SIA Reviews")
 st.caption("A quick look at Singapore Airlines review sentiment and trends.")
 
 df = load_data("data/singapore_airlines_reviews.csv")
@@ -105,31 +132,46 @@ max_rating = int(df["rating"].max()) if df["rating"].notna().any() else 5
 
 with st.sidebar:
     st.header("Filters")
+
+    st.markdown("**Choose a date range**")
+    all_dates = st.checkbox(
+        "All dates",
+        value=False,
+        help="Ignore the date filter and include all dates.",
+    )
     date_range = st.date_input(
         "Date range",
         value=(default_start, default_end) if default_start and default_end else None,
         min_value=min_date.date() if pd.notnull(min_date) else None,
         max_value=max_date.date() if pd.notnull(max_date) else None,
+        disabled=all_dates,
+        label_visibility="collapsed",
+        help="Filter by the review published date.",
     )
+
     rating_range = st.slider(
         "Rating range",
         min_value=min_rating,
         max_value=max_rating,
         value=(min_rating, max_rating),
         step=1,
+        help="Overall customer rating (1 = lowest, 5 = highest).",
     )
     platforms = st.multiselect(
         "Platform",
         options=sorted(df["published_platform"].dropna().unique()),
         default=sorted(df["published_platform"].dropna().unique()),
+        help="Where the review was published (e.g., site/app/source).",
     )
     review_types = st.multiselect(
         "Review type",
         options=sorted(df["type"].dropna().unique()),
         default=sorted(df["type"].dropna().unique()),
+        help="Category of the review (e.g., cabin class, route, or review source type).",
     )
 
-filtered = apply_filters(df, date_range, rating_range, platforms, review_types)
+date_filter = None if all_dates else date_range
+filtered = apply_filters(df, date_filter, rating_range, platforms, review_types)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total reviews", f"{len(filtered):,}")
@@ -158,15 +200,62 @@ st.download_button(
     mime="text/csv",
 )
 
+# Shared time series for overview + trends
+time_series = (
+    filtered.dropna(subset=["published_date"])
+    .set_index("published_date")
+    .resample("MS")
+    .agg(
+        review_count=("rating", "size"),
+        avg_rating=("rating", "mean"),
+    )
+    .reset_index()
+)
+
 tab_overview, tab_trends, tab_text, tab_samples = st.tabs(
     ["Overview", "Trends", "Text Insights", "Samples"]
 )
 
 with tab_overview:
-    left, right = st.columns((2, 3))
+    st.subheader("At-a-glance trends")
+    trend_cols = st.columns(2)
 
-    with left:
-        st.subheader("Ratings distribution")
+    with trend_cols[0]:
+        volume_chart = (
+            alt.Chart(time_series)
+            .mark_line(point=True, color="#ff7f0e")
+            .encode(
+                x=alt.X("published_date:T", title="Month"),
+                y=alt.Y("review_count:Q", title="Reviews"),
+                tooltip=[
+                    alt.Tooltip("published_date:T", title="Month"),
+                    alt.Tooltip("review_count:Q", title="Reviews"),
+                ],
+            )
+            .properties(height=280)
+        )
+        st.altair_chart(volume_chart, use_container_width=True)
+
+    with trend_cols[1]:
+        rating_trend_chart = (
+            alt.Chart(time_series)
+            .mark_line(point=True, color="#1f77b4")
+            .encode(
+                x=alt.X("published_date:T", title="Month"),
+                y=alt.Y("avg_rating:Q", title="Average rating", scale=alt.Scale(domain=[0, 5])),
+                tooltip=[
+                    alt.Tooltip("published_date:T", title="Month"),
+                    alt.Tooltip("avg_rating:Q", title="Avg rating", format=".2f"),
+                ],
+            )
+            .properties(height=280)
+        )
+        st.altair_chart(rating_trend_chart, use_container_width=True)
+
+    st.subheader("Ratings & sentiment")
+    dist_cols = st.columns(2)
+
+    with dist_cols[0]:
         rating_counts = (
             filtered.groupby("rating", dropna=True)
             .size()
@@ -181,102 +270,85 @@ with tab_overview:
                 y=alt.Y("count:Q", title="Reviews"),
                 tooltip=["rating:O", "count:Q"],
             )
-            .properties(height=300)
+            .properties(height=280)
         )
         st.altair_chart(rating_chart, use_container_width=True)
 
-    with right:
-        st.subheader("Platform comparison")
-        platform_metric = st.radio(
-            "View",
-            options=["Average rating", "Review volume"],
-            horizontal=True,
-            label_visibility="collapsed",
+    with dist_cols[1]:
+        sentiment_df = pd.DataFrame(
+            {
+                "Sentiment": ["Positive (4-5)", "Neutral (3)", "Negative (1-2)"],
+                "Count": [
+                    filtered["rating"].between(4, 5).sum(),
+                    filtered["rating"].eq(3).sum(),
+                    filtered["rating"].between(1, 2).sum(),
+                ],
+            }
         )
-        if platform_metric == "Average rating":
-            platform_stats = (
-                filtered.groupby("published_platform", dropna=True)["rating"]
-                .mean()
-                .reset_index(name="value")
-                .sort_values("value", ascending=False)
-            )
-            x_title = "Average rating"
-            x_scale = alt.Scale(domain=[0, 5])
-            tooltip = ["published_platform:N", alt.Tooltip("value:Q", format=".2f")]
-            color = "#2ca02c"
-        else:
-            platform_stats = (
-                filtered.groupby("published_platform", dropna=True)
-                .size()
-                .reset_index(name="value")
-                .sort_values("value", ascending=False)
-            )
-            x_title = "Reviews"
-            x_scale = alt.Scale()
-            tooltip = ["published_platform:N", "value:Q"]
-            color = "#9467bd"
+        sentiment_df["Percent"] = (sentiment_df["Count"] / sentiment_df["Count"].sum()).fillna(0)
 
-        platform_chart = (
-            alt.Chart(platform_stats)
-            .mark_bar(color=color)
+        sentiment_chart = (
+            alt.Chart(sentiment_df)
+            .mark_arc(innerRadius=60)
             .encode(
-                x=alt.X("value:Q", title=x_title, scale=x_scale),
+                theta=alt.Theta("Count:Q"),
+                color=alt.Color(
+                    "Sentiment:N",
+                    scale=alt.Scale(range=["#2ca02c", "#ffbf00", "#d62728"]),
+                ),
+                tooltip=[
+                    "Sentiment:N",
+                    alt.Tooltip("Count:Q", title="Reviews"),
+                    alt.Tooltip("Percent:Q", title="Share", format=".1%"),
+                ],
+            )
+            .properties(height=280)
+        )
+        st.altair_chart(sentiment_chart, use_container_width=True)
+
+    st.subheader("Where reviews come from")
+    platform_cols = st.columns(2)
+
+    with platform_cols[0]:
+        platform_volume = (
+            filtered.groupby("published_platform", dropna=True)
+            .size()
+            .reset_index(name="value")
+            .sort_values("value", ascending=False)
+        )
+        platform_volume_chart = (
+            alt.Chart(platform_volume)
+            .mark_bar(color="#9467bd")
+            .encode(
+                x=alt.X("value:Q", title="Reviews"),
                 y=alt.Y("published_platform:N", title=None, sort="-x"),
-                tooltip=tooltip,
-            )
-            .properties(height=300)
-        )
-        st.altair_chart(platform_chart, use_container_width=True)
-
-    st.subheader("Review type analysis")
-    type_stats = (
-        filtered.groupby("type", dropna=True)
-        .agg(
-            review_count=("rating", "size"),
-            avg_rating=("rating", "mean"),
-        )
-        .reset_index()
-    )
-
-    type_cols = st.columns(2)
-    with type_cols[0]:
-        type_rating_chart = (
-            alt.Chart(type_stats)
-            .mark_bar(color="#17becf")
-            .encode(
-                x=alt.X("avg_rating:Q", title="Average rating", scale=alt.Scale(domain=[0, 5])),
-                y=alt.Y("type:N", title=None, sort="-x"),
-                tooltip=["type:N", alt.Tooltip("avg_rating:Q", format=".2f")],
+                tooltip=["published_platform:N", "value:Q"],
             )
             .properties(height=280)
         )
-        st.altair_chart(type_rating_chart, use_container_width=True)
+        st.altair_chart(platform_volume_chart, use_container_width=True)
 
-    with type_cols[1]:
-        type_volume_chart = (
-            alt.Chart(type_stats)
-            .mark_bar(color="#bcbd22")
+    with platform_cols[1]:
+        platform_avg = (
+            filtered.groupby("published_platform", dropna=True)["rating"]
+            .mean()
+            .reset_index(name="value")
+            .sort_values("value", ascending=False)
+        )
+        platform_avg_chart = (
+            alt.Chart(platform_avg)
+            .mark_bar(color="#2ca02c")
             .encode(
-                x=alt.X("review_count:Q", title="Reviews"),
-                y=alt.Y("type:N", title=None, sort="-x"),
-                tooltip=["type:N", "review_count:Q"],
+                x=alt.X("value:Q", title="Average rating", scale=alt.Scale(domain=[0, 5])),
+                y=alt.Y("published_platform:N", title=None, sort="-x"),
+                tooltip=["published_platform:N", alt.Tooltip("value:Q", format=".2f")],
             )
             .properties(height=280)
         )
-        st.altair_chart(type_volume_chart, use_container_width=True)
+        st.altair_chart(platform_avg_chart, use_container_width=True)
 
 with tab_trends:
     st.subheader("Review volume and rating trends over time")
-    time_series = (
-        filtered.dropna(subset=["published_date"])
-        .set_index("published_date")
-        .resample("MS")
-        .agg(
-            review_count=("rating", "size"),
-            avg_rating=("rating", "mean"),
-        )
-        .reset_index()
-    )
 
     volume_chart = (
         alt.Chart(time_series)
