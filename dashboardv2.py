@@ -28,14 +28,155 @@ st.markdown(
             border: 1px solid #30d158;
             color: #ffffff;
         }
+        [data-testid="stButton"] button {
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+        [data-testid="stButton"] button:hover {
+            background-color: #30d158 !important;
+            color: #ffffff !important;
+            border-color: #30d158 !important;
+        }
+        .guide-hover-wrap {
+            position: relative;
+            display: inline-block;
+            margin-bottom: 0.25rem;
+        }
+        .guide-hover-trigger {
+            display: inline-block;
+            font-size: 1.05rem;
+            font-weight: 600;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            cursor: help;
+        }
+        .guide-hover-trigger:hover {
+            background-color: #f4f6f8;
+        }
+        .guide-hover-tooltip {
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+            position: absolute;
+            left: 0;
+            top: calc(100% + 6px);
+            z-index: 1000;
+            font-size: 20px;
+            line-height: 1.35;
+            background: #ffffff;
+            border: 1px solid #d9d9d9;
+            border-radius: 8px;
+            padding: 10px 12px;
+            white-space: nowrap;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+        }
+        .guide-hover-wrap:hover .guide-hover-tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
+        [data-testid="stExpander"] details summary:hover {
+            background-color: #30d158;
+            color: #ffffff;
+            border-radius: 8px;
+        }
+        [data-testid="stExpander"] details summary:hover * {
+            color: #ffffff !important;
+        }
+        [data-baseweb="tab-list"] {
+            gap: 0.35rem;
+            margin-bottom: 0.35rem;
+        }
+        [data-baseweb="tab-list"] button,
+        [data-baseweb="tab-list"] [role="tab"],
+        [data-baseweb="tab"] {
+            font-size: 1.65rem !important;
+            font-weight: 700 !important;
+            padding: 1rem 2rem !important;
+            min-height: 3.5rem !important;
+            border-radius: 0 !important;
+            background-color: transparent !important;
+            color: #1f2937 !important;
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+        [data-baseweb="tab-list"] button *,
+        [data-baseweb="tab-list"] [role="tab"] *,
+        [data-baseweb="tab"] * {
+            font-size: 1.65rem !important;
+            font-weight: 700 !important;
+            line-height: 1.2 !important;
+        }
+        [data-baseweb="tab-list"] button:hover,
+        [data-baseweb="tab-list"] [role="tab"]:hover,
+        [data-baseweb="tab"]:hover {
+            background-color: #f3fdf6 !important;
+            color: #15803d !important;
+        }
+        [data-baseweb="tab-list"] button[aria-selected="true"],
+        [data-baseweb="tab-list"] [role="tab"][aria-selected="true"],
+        [data-baseweb="tab"][aria-selected="true"] {
+            background-color: transparent !important;
+            color: #15803d !important;
+            border: none !important;
+            border-bottom: 3px solid #30d158 !important;
+            box-shadow: none !important;
+            text-decoration: none !important;
+        }
+        [data-baseweb="tab-list"] button,
+        [data-baseweb="tab-list"] [role="tab"],
+        [data-baseweb="tab"] {
+            border: none !important;
+            border-bottom: 3px solid transparent !important;
+            box-shadow: none !important;
+            text-decoration: none !important;
+        }
+        [data-baseweb="tab-highlight"] {
+            background-color: transparent !important;
+            height: 0 !important;
+        }
+        [data-baseweb="tab-border"],
+        [data-baseweb="tab-list"]::before,
+        [data-baseweb="tab-list"]::after {
+            display: none !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            height: 0 !important;
+        }
+        .title-hover-wrap {
+            position: relative;
+            display: inline-block;
+            width: fit-content;
+        }
+        .title-hover-tooltip {
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+            position: absolute;
+            left: 300px;
+            bottom: calc(100% - 20px);
+            z-index: 1000;
+            font-size: 30px;
+            line-height: 1.35;
+            color: #6b6b6b;
+            background: #ffffff;
+            border: 1px solid #d9d9d9;
+            border-radius: 8px;
+            padding: 12px 14px;
+            white-space: nowrap;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+        }
+        .title-hover-wrap:hover .title-hover-tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # Global font styling (Altair charts)
+@alt.theme.register("arial_theme", enable=True)
 def _altair_arial_theme():
-    return {
+    return alt.theme.ThemeConfig({
         "config": {
             "font": "Arial",
             "title": {"font": "Arial"},
@@ -43,10 +184,7 @@ def _altair_arial_theme():
             "legend": {"labelFont": "Arial", "titleFont": "Arial"},
             "header": {"labelFont": "Arial", "titleFont": "Arial"},
         }
-    }
-
-alt.themes.register("arial_theme", _altair_arial_theme)
-alt.themes.enable("arial_theme")
+    })
 
 REQUIRED_COLUMNS = {
     "published_date",
@@ -160,7 +298,99 @@ def generate_key_takeaways(df: pd.DataFrame) -> str:
     
     return f"📊 {negative_pct:.1f}% of reviews are negative | ⭐ Avg rating: {avg_rating:.2f} | 📱 Most reviews from {top_platform}"
 
-def generate_dataset_overview(df: pd.DataFrame, model_choice: str = "auto") -> str:
+def _format_date_window(df: pd.DataFrame) -> str:
+    date_data = df["published_date"].dropna() if "published_date" in df.columns else pd.Series([], dtype="datetime64[ns]")
+    if date_data.empty:
+        return "Unknown period"
+    return f"{date_data.min():%b %Y} to {date_data.max():%b %Y}"
+
+def _format_date_range_duration(start_date, end_date) -> str:
+    if not start_date or not end_date:
+        return "Unknown duration"
+
+    start = pd.Timestamp(start_date)
+    end = pd.Timestamp(end_date)
+    if start > end:
+        start, end = end, start
+
+    total_months = (end.year - start.year) * 12 + (end.month - start.month)
+    years = total_months // 12
+    months = total_months % 12
+
+    parts = []
+    if years:
+        parts.append(f"{years} year" + ("s" if years != 1 else ""))
+    if months:
+        parts.append(f"{months} month" + ("s" if months != 1 else ""))
+
+    if not parts:
+        return "0 months"
+    return " ".join(parts)
+
+def build_download_recommendations(filtered_df: pd.DataFrame) -> pd.DataFrame:
+    """Create a plain-language guide for what to download by common user goals."""
+    return pd.DataFrame(
+        [
+            {
+                "Goal": "Track overall customer health",
+                "Suggested filters": "Use current date + platform filters",
+                "Columns to download": "published_date, rating, published_platform",
+                "Why this is enough": "Lets you monitor volume, sentiment trend, and channel performance quickly.",
+            },
+            {
+                "Goal": "Investigate complaints",
+                "Suggested filters": "Set rating range to 1-2",
+                "Columns to download": "published_date, rating, published_platform, title, text, helpful_votes",
+                "Why this is enough": "Helps identify pain points, when they happened, where they happened, and urgency.",
+            },
+            {
+                "Goal": "Find what customers love",
+                "Suggested filters": "Set rating range to 4-5",
+                "Columns to download": "published_date, rating, published_platform, title, text",
+                "Why this is enough": "Useful for best-practice examples, success stories, and experience benchmarks.",
+            },
+            {
+                "Goal": "Prioritize high-impact feedback",
+                "Suggested filters": "Any rating range; sort by helpful_votes after download",
+                "Columns to download": "published_date, rating, published_platform, helpful_votes, title, text",
+                "Why this is enough": "Focuses on feedback that other users found most useful and credible.",
+            },
+        ]
+    )
+
+def build_at_a_glance_trend_summary(time_series: pd.DataFrame) -> str:
+    """Build compact trend context from overview's At-a-glance trend charts."""
+    if time_series is None or len(time_series) < 2:
+        return "Trend: insufficient monthly data"
+
+    trend_df = time_series.sort_values("published_date").copy()
+    trend_df = trend_df.dropna(subset=["published_date", "review_count", "avg_rating"])
+    if len(trend_df) < 2:
+        return "Trend: insufficient monthly data"
+
+    first_row = trend_df.iloc[0]
+    last_row = trend_df.iloc[-1]
+
+    review_change = float(last_row["review_count"] - first_row["review_count"])
+    rating_change = float(last_row["avg_rating"] - first_row["avg_rating"])
+
+    peak_volume_row = trend_df.loc[trend_df["review_count"].idxmax()]
+    best_rating_row = trend_df.loc[trend_df["avg_rating"].idxmax()]
+    worst_rating_row = trend_df.loc[trend_df["avg_rating"].idxmin()]
+
+    volume_direction = "increasing" if review_change > 0 else "decreasing" if review_change < 0 else "stable"
+    rating_direction = "improving" if rating_change > 0 else "declining" if rating_change < 0 else "stable"
+
+    return (
+        f"Trend: review volume {volume_direction} ({review_change:+.0f} from "
+        f"{first_row['published_date']:%b %Y} to {last_row['published_date']:%b %Y}); "
+        f"average rating {rating_direction} ({rating_change:+.2f}); "
+        f"peak volume in {peak_volume_row['published_date']:%b %Y} ({peak_volume_row['review_count']:.0f} reviews); "
+        f"best rating in {best_rating_row['published_date']:%b %Y} ({best_rating_row['avg_rating']:.2f}); "
+        f"lowest rating in {worst_rating_row['published_date']:%b %Y} ({worst_rating_row['avg_rating']:.2f})"
+    )
+
+def generate_dataset_overview(df: pd.DataFrame, time_series: pd.DataFrame, model_choice: str = "auto") -> str:
     """Generate AI-powered narrative dataset overview to orient first-time users.
     
     Args:
@@ -179,8 +409,12 @@ def generate_dataset_overview(df: pd.DataFrame, model_choice: str = "auto") -> s
     positive_pct = df["rating"].between(4, 5).mean() * 100
     date_range = f"{df['published_date'].min().strftime('%b %Y')} to {df['published_date'].max().strftime('%b %Y')}" if "published_date" in df.columns else "Unknown period"
     platforms = ", ".join(df["published_platform"].value_counts().head(3).index.tolist()) if df["published_platform"].notna().any() else "Multiple platforms"
+    trend_summary = build_at_a_glance_trend_summary(time_series)
     
-    data_summary = f"Reviews: {total_reviews}, Avg Rating: {avg_rating:.2f}, Negative: {negative_pct:.0f}%, Positive: {positive_pct:.0f}%, Period: {date_range}, Platforms: {platforms}"
+    data_summary = (
+        f"Reviews: {total_reviews}, Avg Rating: {avg_rating:.2f}, Negative: {negative_pct:.0f}%, "
+        f"Positive: {positive_pct:.0f}%, Period: {date_range}, Platforms: {platforms}, {trend_summary}"
+    )
     
     prompt = f"Briefly describe what this Singapore Airlines review dataset shows (1-2 sentences). Context: {data_summary}"
     
@@ -290,7 +524,7 @@ def _generate_groq_insight(prompt: str, api_key: str) -> str:
             max_tokens=100,  # Reduced to avoid token limits
         )
         insight_text = message.choices[0].message.content.strip()
-        return f"🤖 **AI Insight (Groq):** {insight_text}"
+        return f"✨ **AI Insight (Groq):** {insight_text}"
     except Exception as e:
         error_msg = str(e)
         # Show more of the error for debugging
@@ -324,7 +558,7 @@ def _generate_ollama_insight(prompt: str) -> str:
         if response.status_code == 200:
             result = response.json()
             insight_text = result.get('response', 'No insight generated').strip()
-            return f"🤖 **AI Insight (Ollama):** {insight_text}"
+            return f"✨ **AI Insight (Ollama):** {insight_text}"
         else:
             return "💡 **AI Insight:** Ollama API error. Ensure Ollama is running: `ollama serve`"
     
@@ -359,10 +593,18 @@ def render_wordcloud(text_series, stopwords, title):
         collocations=False,
     ).generate(text)
     st.write(title)
-    st.image(wc.to_array(), use_container_width=True)
+    st.image(wc.to_array(), width="stretch")
 
-st.title("Self‑Service Data Hub: SIA Google Reviews")
-st.caption("A quick look at Singapore Airlines review sentiment and trends.")
+st.markdown(
+    """
+    <div class="title-hover-wrap">
+        <h1>Self‑Service Data Hub: SIA Google Reviews</h1>
+        <span class="title-hover-tooltip">Created by Stan</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.caption("A self-service dashboard to explore the data profile, filter, and export Singapore Airlines review data for your analysis needs. Use the sidebar/filters panel to customize your view and download the dataset that fits your goals.")
 
 df = load_data("data/singapore_airlines_reviews.csv")
 
@@ -407,7 +649,7 @@ with st.sidebar:
             if fixed_end_date > month_starts[-1]:
                 fixed_end_date = month_starts[-1]
 
-            if st.button("↺ Reset", key="reset_date", use_container_width=True):
+            if st.button("↺ Reset", key="reset_date", width="stretch"):
                 st.session_state["date_range_slider"] = (fixed_start_date, fixed_end_date)
 
             stored_range = st.session_state.get("date_range_slider")
@@ -428,11 +670,12 @@ with st.sidebar:
                 format_func=lambda d: d.strftime("%b %Y"),
                 key="date_range_slider",
             )
+            selected_duration = _format_date_range_duration(date_range[0], date_range[1])
             st.caption(
-                f"Selected: {date_range[0].strftime('%b %Y')} → {date_range[1].strftime('%b %Y')}"
+                f"Selected: {date_range[0].strftime('%b %Y')} → {date_range[1].strftime('%b %Y')} ({selected_duration})"
             )
 
-    with st.expander("Rating range", expanded=True):
+    with st.expander("Rating range", expanded=False):
         rating_range = st.slider(
             "Rating range",
             min_value=min_rating,
@@ -451,7 +694,7 @@ with st.sidebar:
             help="Where the review was published (e.g., site/app/source).",
         )
     
-    with st.expander("AI Model", expanded=False):
+    with st.expander("✨ AI Model", expanded=False):
         ai_model_choice = st.radio(
             "Select AI model for insights:",
             options=["Auto", "Groq (Cloud)", "Ollama (Local)"],
@@ -474,7 +717,7 @@ with download_container:
         data=to_csv_bytes(filtered),
         file_name="sia_reviews_filtered.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
         type="primary",
         help="Export the reviews that match your filters.",
     )
@@ -495,16 +738,62 @@ time_series = (
     .reset_index()
 )
 
-tab_profile, tab_overview, tab_explore = st.tabs(
-    ["Data Profile", "Overview", "Data Exploration"]
+tab_overview, tab_explore, tab_export = st.tabs(
+    ["Overview", "Data Exploration", "Data & Export"]
 )
 
-with tab_profile:
-    st.subheader("Dataset dictionary")
+with tab_export:
+    st.caption("Understand column characteristics and data context, preview a sample of the raw dataset, and download when you're ready.")
+    
+    st.markdown(
+        """
+        <div class="guide-hover-wrap">
+            <span class="guide-hover-trigger">ℹ️ New here? Hover for help</span>
+            <span class="guide-hover-tooltip">Start with Download Planning Guide.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander("🧭 Download planning guide", expanded=False):
+        st.caption("For non-technical users: use this quick guide to decide what data to export for your task.")
+
+        in_scope_reviews = len(filtered)
+        total_reviews = len(df)
+        scope_pct = (in_scope_reviews / total_reviews * 100) if total_reviews else 0
+        neg_reviews = int(filtered["rating"].between(1, 2).sum())
+        pos_reviews = int(filtered["rating"].between(4, 5).sum())
+        selected_platform_count = filtered["published_platform"].dropna().nunique()
+        selected_period = _format_date_window(filtered)
+
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Reviews in current scope", f"{in_scope_reviews:,}", f"{scope_pct:.1f}% of total")
+        summary_cols[1].metric("Date period", selected_period)
+        summary_cols[2].metric("Platforms covered", f"{selected_platform_count}")
+        summary_cols[3].metric("Negative vs positive", f"{neg_reviews} / {pos_reviews}")
+
+        st.info(
+            "Start with the smallest dataset that answers your question. "
+            "If you only need trends, download fewer columns; include `title`/`text` only when you need detailed root-cause analysis."
+        )
+
+        st.markdown("**What should I download?**")
+        recommendation_df = build_download_recommendations(filtered)
+        st.dataframe(
+            recommendation_df,
+            width="stretch",
+            hide_index=True,
+        )
+
+    st.divider()
+
+    st.subheader(
+        "Dataset dictionary",
+        help="Use this field guide to understand each column and select only what you need before downloading.",
+    )
     dict_df = build_data_dictionary(df)
     st.dataframe(
         dict_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "#": st.column_config.NumberColumn(width="small"),
@@ -512,7 +801,10 @@ with tab_profile:
         },
     )
 
-    st.subheader("Raw Data")
+    st.subheader(
+        "Raw Data",
+        help="Preview the actual filtered rows to confirm relevance before downloading.",
+    )
     show_cols = ["published_date", "rating", "published_platform", "title", "text", "helpful_votes"]
     row_option = st.radio(
         "Rows to display",
@@ -538,11 +830,13 @@ with tab_profile:
         sample_df = base_df.iloc[start_idx:end_row]
     st.dataframe(
         sample_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
 with tab_overview:
+    st.caption("Get a high-level summary of your filtered dataset with AI-generated insights, key metrics, and trend visualizations to quickly understand review patterns and sentiment.")
+    
     st.info(
         generate_key_takeaways(filtered),
         icon="💡"
@@ -550,7 +844,7 @@ with tab_overview:
 
     # Get selected AI model from session state for Dataset Overview
     selected_model = st.session_state.get("selected_ai_model", "auto")
-    st.markdown(generate_dataset_overview(filtered, selected_model))
+    st.markdown(generate_dataset_overview(filtered, time_series, selected_model))
 
     st.divider()
 
@@ -572,7 +866,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(volume_chart, use_container_width=True)
+        st.altair_chart(volume_chart, width="stretch")
 
     with trend_cols[1]:
         rating_trend_chart = (
@@ -588,7 +882,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(rating_trend_chart, use_container_width=True)
+        st.altair_chart(rating_trend_chart, width="stretch")
 
     st.subheader("Ratings & sentiment")
     st.caption("See how reviews are distributed across ratings and overall sentiment breakdown.")
@@ -611,7 +905,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(rating_chart, use_container_width=True)
+        st.altair_chart(rating_chart, width="stretch")
 
     with dist_cols[1]:
         sentiment_df = pd.DataFrame(
@@ -643,7 +937,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(sentiment_chart, use_container_width=True)
+        st.altair_chart(sentiment_chart, width="stretch")
 
     st.subheader("Where reviews come from")
     st.caption("Compare review volume and average ratings across different platforms.")
@@ -666,7 +960,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(platform_volume_chart, use_container_width=True)
+        st.altair_chart(platform_volume_chart, width="stretch")
 
     with platform_cols[1]:
         platform_avg = (
@@ -685,7 +979,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(platform_avg_chart, use_container_width=True)
+        st.altair_chart(platform_avg_chart, width="stretch")
 
     with st.expander("📝 Text Insights", expanded=False):
         st.subheader("Text length vs rating")
@@ -710,7 +1004,7 @@ with tab_overview:
             "text_length",
         ).mark_line(color="#1f77b4")
 
-        st.altair_chart(text_length_chart + trend_line, use_container_width=True)
+        st.altair_chart(text_length_chart + trend_line, width="stretch")
 
         st.subheader("Helpfulness insights")
         st.caption("Understand which reviews are marked as helpful and what characteristics they share.")
@@ -734,7 +1028,7 @@ with tab_overview:
                 )
                 .properties(height=280)
             )
-            st.altair_chart(helpful_rating_chart, use_container_width=True)
+            st.altair_chart(helpful_rating_chart, width="stretch")
 
         with helpful_cols[1]:
             helpful_length_chart = (
@@ -755,7 +1049,7 @@ with tab_overview:
                 "text_length",
                 "helpful_votes",
             ).mark_line(color="#1f77b4")
-            st.altair_chart(helpful_length_chart + helpful_trend, use_container_width=True)
+            st.altair_chart(helpful_length_chart + helpful_trend, width="stretch")
 
         st.subheader("Keyword clouds")
         st.caption("Discover the most frequently mentioned words in positive and negative reviews.")
@@ -796,7 +1090,7 @@ with tab_overview:
             render_wordcloud(filtered["text"], base_stopwords, "Top full-review keywords")
 
 with tab_explore:
-    st.subheader("Data Exploration")
+    
     st.caption("Explore your data through visualizations. Choose a preset or build your own.")
 
     explore_cols = filtered.columns.tolist()
@@ -820,7 +1114,7 @@ with tab_explore:
     preset_selected = None
     for idx, (preset_name, x, y, agg) in enumerate(presets):
         with preset_cols[idx % 3]:
-            if st.button(preset_name, use_container_width=True, help=f"Explore {preset_name.lower()}"):
+            if st.button(preset_name, width="stretch", help=f"Explore {preset_name.lower()}"):
                 preset_selected = (x, y, agg)
                 st.session_state.preset_choice = preset_selected
     
@@ -918,7 +1212,7 @@ with tab_explore:
         else:
             st.warning("📊 Box plots require a numeric Y axis. Please select a metric instead of (count).")
 
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
     
     st.markdown(generate_chart_insight(filtered, x_col, y_col, agg_label))
     # Get selected AI model from session state (default to auto)
