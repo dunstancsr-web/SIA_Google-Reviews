@@ -160,6 +160,45 @@ def generate_key_takeaways(df: pd.DataFrame) -> str:
     
     return f"📊 {negative_pct:.1f}% of reviews are negative | ⭐ Avg rating: {avg_rating:.2f} | 📱 Most reviews from {top_platform}"
 
+def generate_dataset_overview(df: pd.DataFrame, model_choice: str = "auto") -> str:
+    """Generate AI-powered narrative dataset overview to orient first-time users.
+    
+    Args:
+        df: Filtered dataframe
+        model_choice: 'groq', 'ollama', or 'auto' (default)
+    """
+    import os
+    
+    if len(df) == 0:
+        return "📊 **Dataset Overview:** No data available with current filters."
+    
+    # Create dataset summary for AI to contextualize
+    total_reviews = len(df)
+    avg_rating = df["rating"].mean()
+    negative_pct = df["rating"].between(1, 2).mean() * 100
+    positive_pct = df["rating"].between(4, 5).mean() * 100
+    date_range = f"{df['published_date'].min().strftime('%b %Y')} to {df['published_date'].max().strftime('%b %Y')}" if "published_date" in df.columns else "Unknown period"
+    platforms = ", ".join(df["published_platform"].value_counts().head(3).index.tolist()) if df["published_platform"].notna().any() else "Multiple platforms"
+    
+    data_summary = f"Reviews: {total_reviews}, Avg Rating: {avg_rating:.2f}, Negative: {negative_pct:.0f}%, Positive: {positive_pct:.0f}%, Period: {date_range}, Platforms: {platforms}"
+    
+    prompt = f"Briefly describe what this Singapore Airlines review dataset shows (1-2 sentences). Context: {data_summary}"
+    
+    # Route to selected model
+    groq_api_key = os.environ.get("GROQ_API_KEY")
+    
+    if model_choice == "groq":
+        if groq_api_key:
+            return _generate_groq_insight(prompt, groq_api_key)
+        else:
+            return "📊 **Dataset Overview:** Groq not configured. Using Ollama...\n" + _generate_ollama_insight(prompt)
+    elif model_choice == "ollama":
+        return _generate_ollama_insight(prompt)
+    else:  # auto
+        if groq_api_key:
+            return _generate_groq_insight(prompt, groq_api_key)
+        return _generate_ollama_insight(prompt)
+
 def generate_chart_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: str) -> str:
     """Generate an insight about the chart data."""
     if y_col == "(count)":
@@ -184,8 +223,12 @@ def get_formatted_columns(cols: list, df: pd.DataFrame) -> dict:
     """Return mapping of formatted names to original column names."""
     return {format_column_with_type(col, df): col for col in cols}
 
-def generate_ai_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: str) -> str:
-    """Generate AI-powered insight using Groq API (cloud-compatible) or Ollama (local fallback)."""
+def generate_ai_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: str, model_choice: str = "auto") -> str:
+    """Generate AI-powered insight using specified model or auto-detect.
+    
+    Args:
+        model_choice: 'groq', 'ollama', or 'auto' (default)
+    """
     import os
     
     # Generate data summary (limit to top 10 items to avoid token limits)
@@ -202,13 +245,22 @@ def generate_ai_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: str
     # Shorter, simpler prompt to reduce token count
     prompt = f"Data: {data_desc}. One insight about '{summary}' in airline reviews (1-2 sentences)."
     
-    # Check for Groq API (cloud-compatible)
+    # Route to selected model
     groq_api_key = os.environ.get("GROQ_API_KEY")
-    if groq_api_key:
-        return _generate_groq_insight(prompt, groq_api_key)
     
-    # Fallback to Ollama (local only)
-    return _generate_ollama_insight(prompt)
+    if model_choice == "groq":
+        if groq_api_key:
+            return _generate_groq_insight(prompt, groq_api_key)
+        else:
+            return "💡 **AI Insight:** Groq model selected but GROQ_API_KEY not set. Using Ollama fallback..."
+    elif model_choice == "ollama":
+        return _generate_ollama_insight(prompt)
+    else:  # auto
+        # Try Groq first if available
+        if groq_api_key:
+            return _generate_groq_insight(prompt, groq_api_key)
+        # Fallback to Ollama
+        return _generate_ollama_insight(prompt)
 
 def _generate_groq_insight(prompt: str, api_key: str) -> str:
     """Generate insight using Groq API."""
@@ -398,6 +450,17 @@ with st.sidebar:
             default=platform_options,
             help="Where the review was published (e.g., site/app/source).",
         )
+    
+    with st.expander("AI Model", expanded=False):
+        ai_model_choice = st.radio(
+            "Select AI model for insights:",
+            options=["Auto", "Groq (Cloud)", "Ollama (Local)"],
+            help="Auto: Uses Groq if API key is set, otherwise Ollama\nGroq: Fast cloud-based model (requires API key)\nOllama: Offline local model (requires running service)",
+            horizontal=False,
+        )
+        # Map radio selection to model choice
+        model_map = {"Auto": "auto", "Groq (Cloud)": "groq", "Ollama (Local)": "ollama"}
+        st.session_state.selected_ai_model = model_map[ai_model_choice]
 
 
 
@@ -432,8 +495,8 @@ time_series = (
     .reset_index()
 )
 
-tab_profile, tab_overview, tab_explore, tab_text = st.tabs(
-    ["Data Profile", "Overview", "Data Exploration", "Text Insights"]
+tab_profile, tab_overview, tab_explore = st.tabs(
+    ["Data Profile", "Overview", "Data Exploration"]
 )
 
 with tab_profile:
@@ -484,22 +547,12 @@ with tab_overview:
         generate_key_takeaways(filtered),
         icon="💡"
     )
-    st.subheader("Key Metrics")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total reviews", f"{len(filtered):,}")
-    col2.metric("Average rating", f"{filtered['rating'].mean():.2f}" if len(filtered) else "—")
-    col3.metric("% Positive (4-5)", f"{(filtered['rating'].ge(4).mean() * 100):.1f}%" if len(filtered) else "—")
-    col4.metric("Median length", f"{filtered['text_length'].median():.0f} chars" if len(filtered) else "—")
 
-    avg_rating = filtered["rating"].mean()
-    positive_pct = filtered["rating"].ge(4).mean() * 100
-    negative_pct = filtered["rating"].le(2).mean() * 100
-    st.markdown(
-        f"**Summary:** {len(filtered):,} reviews | "
-        f"Avg rating {avg_rating:.2f} | "
-        f"Positive (4–5) {positive_pct:.1f}% | "
-        f"Negative (1–2) {negative_pct:.1f}%"
-    )
+    # Get selected AI model from session state for Dataset Overview
+    selected_model = st.session_state.get("selected_ai_model", "auto")
+    st.markdown(generate_dataset_overview(filtered, selected_model))
+
+    st.divider()
 
     st.subheader("At-a-glance trends")
     st.caption("Track how review volume and ratings have changed over time to spot trends and patterns.")
@@ -634,9 +687,117 @@ with tab_overview:
         )
         st.altair_chart(platform_avg_chart, use_container_width=True)
 
+    with st.expander("📝 Text Insights", expanded=False):
+        st.subheader("Text length vs rating")
+        st.caption("Explore if longer reviews tend to receive higher or lower ratings.")
+        text_length_chart = (
+            alt.Chart(filtered.dropna(subset=["rating", "text_length"]))
+            .mark_circle(size=60, opacity=0.35, color="#8c564b")
+            .encode(
+                x=alt.X("rating:Q", title="Rating", scale=alt.Scale(domain=[1, 5])),
+                y=alt.Y("text_length:Q", title="Text length (characters)"),
+                tooltip=[
+                    alt.Tooltip("rating:Q", title="Rating"),
+                    alt.Tooltip("text_length:Q", title="Text length"),
+                    alt.Tooltip("published_platform:N", title="Platform"),
+                ],
+            )
+            .properties(height=320)
+        )
+
+        trend_line = text_length_chart.transform_regression(
+            "rating",
+            "text_length",
+        ).mark_line(color="#1f77b4")
+
+        st.altair_chart(text_length_chart + trend_line, use_container_width=True)
+
+        st.subheader("Helpfulness insights")
+        st.caption("Understand which reviews are marked as helpful and what characteristics they share.")
+        helpful_data = filtered.dropna(subset=["rating", "helpful_votes", "text_length"])
+        helpful_cols = st.columns(2)
+
+        with helpful_cols[0]:
+            helpful_by_rating = (
+                helpful_data.groupby("rating", dropna=True)["helpful_votes"]
+                .mean()
+                .reset_index(name="avg_helpful")
+                .sort_values("rating")
+            )
+            helpful_rating_chart = (
+                alt.Chart(helpful_by_rating)
+                .mark_bar(color="#e377c2")
+                .encode(
+                    x=alt.X("rating:O", title="Rating"),
+                    y=alt.Y("avg_helpful:Q", title="Avg helpful votes"),
+                    tooltip=["rating:O", alt.Tooltip("avg_helpful:Q", format=".2f")],
+                )
+                .properties(height=280)
+            )
+            st.altair_chart(helpful_rating_chart, use_container_width=True)
+
+        with helpful_cols[1]:
+            helpful_length_chart = (
+                alt.Chart(helpful_data)
+                .mark_circle(size=60, opacity=0.35, color="#7f7f7f")
+                .encode(
+                    x=alt.X("text_length:Q", title="Text length (characters)"),
+                    y=alt.Y("helpful_votes:Q", title="Helpful votes"),
+                    tooltip=[
+                        alt.Tooltip("text_length:Q", title="Text length"),
+                        alt.Tooltip("helpful_votes:Q", title="Helpful votes"),
+                        alt.Tooltip("rating:Q", title="Rating"),
+                    ],
+                )
+                .properties(height=280)
+            )
+            helpful_trend = helpful_length_chart.transform_regression(
+                "text_length",
+                "helpful_votes",
+            ).mark_line(color="#1f77b4")
+            st.altair_chart(helpful_length_chart + helpful_trend, use_container_width=True)
+
+        st.subheader("Keyword clouds")
+        st.caption("Discover the most frequently mentioned words in positive and negative reviews.")
+        base_stopwords = set(STOPWORDS) if STOPWORDS else set()
+        base_stopwords.update(
+            {
+                "singapore",
+                "airlines",
+                "airline",
+                "flight",
+                "flights",
+                "crew",
+                "seat",
+                "seats",
+                "plane",
+                "aircraft",
+            }
+        )
+
+        pos_reviews = filtered[filtered["rating"].between(4, 5)]["text"]
+        neg_reviews = filtered[filtered["rating"].between(1, 2)]["text"]
+
+        pos_col, neg_col = st.columns(2)
+        with pos_col:
+            st.subheader("Positive reviews (4–5)")
+            render_wordcloud(pos_reviews, base_stopwords, "Top positive keywords")
+        with neg_col:
+            st.subheader("Negative reviews (1–2)")
+            render_wordcloud(neg_reviews, base_stopwords, "Top negative keywords")
+
+        st.subheader("Title vs full review keywords")
+        title_col, text_col = st.columns(2)
+        with title_col:
+            st.subheader("Titles")
+            render_wordcloud(filtered["title"], base_stopwords, "Top title keywords")
+        with text_col:
+            st.subheader("Full reviews")
+            render_wordcloud(filtered["text"], base_stopwords, "Top full-review keywords")
+
 with tab_explore:
     st.subheader("Data Exploration")
-    st.caption("Select columns for X and Y to build a quick bar or line chart to explore relationships.")
+    st.caption("Explore your data through visualizations. Choose a preset or build your own.")
 
     explore_cols = filtered.columns.tolist()
     numeric_cols = [col for col in explore_cols if is_numeric_dtype(filtered[col])]
@@ -646,15 +807,42 @@ with tab_explore:
     y_col_options = ["(count)"] + numeric_cols
     y_col_mapping = get_formatted_columns(y_col_options, filtered)
 
-    with st.expander("🛠️ Chart Builder", expanded=True):
+    # ===== POPULAR EXPLORATIONS (Preset Templates) =====
+    st.subheader("📊 Popular Explorations", help="Click any preset to quickly explore common insights")
+    
+    preset_cols = st.columns(3)
+    presets = [
+        ("📈 Rating Trends", "published_date", "rating", "mean"),
+        ("📱 Platform Comparison", "published_platform", "rating", "mean"),
+        ("💬 Review Volume by Platform", "published_platform", "(count)", "count"),
+    ]
+    
+    preset_selected = None
+    for idx, (preset_name, x, y, agg) in enumerate(presets):
+        with preset_cols[idx % 3]:
+            if st.button(preset_name, use_container_width=True, help=f"Explore {preset_name.lower()}"):
+                preset_selected = (x, y, agg)
+                st.session_state.preset_choice = preset_selected
+    
+    st.divider()
+
+    # ===== CHART BUILDER =====
+    st.subheader("🛠️ Custom Chart Builder", help="Build your own exploration by selecting columns")
+    
+    with st.expander("✏️ Customize Chart", expanded=True):
         control_cols = st.columns([1.5, 1.5, 1.5])
         with control_cols[0]:
-            chart_type = st.selectbox("Chart type", ["Bar", "Line"])
+            chart_type = st.selectbox(
+                "Chart type",
+                ["Bar", "Line", "Area", "Scatter", "Box Plot"],
+                help="Bar: Categories | Line: Time series | Area: Trends over time | Scatter: Relationships | Box: Distribution"
+            )
         with control_cols[1]:
             x_col_formatted = st.selectbox(
                 "X axis",
                 options=list(x_col_mapping.keys()),
                 index=list(x_col_mapping.keys()).index(format_column_with_type("published_date", filtered)) if "published_date" in explore_cols else 0,
+                help="📊 Numeric or date | 🔤 Text/category"
             )
             x_col = x_col_mapping[x_col_formatted]
         with control_cols[2]:
@@ -662,175 +850,78 @@ with tab_explore:
                 "Y axis",
                 options=list(y_col_mapping.keys()),
                 index=0 if not numeric_cols else 1,
+                help="(count) = review frequency | Metric = aggregate values"
             )
             y_col = y_col_mapping[y_col_formatted]
 
         if y_col == "(count)":
             agg_label = "count"
-            plot_df = (
-                filtered.groupby(x_col, dropna=True)
-                .size()
-                .reset_index(name="value")
-            )
-        else:
+    
+    # Use preset if selected, otherwise use custom selection
+    if "preset_choice" in st.session_state:
+        x_col, y_col, agg_type = st.session_state.preset_choice
+        chart_type = "Line" if x_col == "published_date" else "Bar"
+        agg_label = agg_type
+        # Clear preset for next interaction
+        del st.session_state.preset_choice
+    
+    if y_col == "(count)":
+        agg_label = "count"
+        plot_df = (
+            filtered.groupby(x_col, dropna=True)
+            .size()
+            .reset_index(name="value")
+        )
+    else:
+        if "agg_label" not in locals():
             agg_func = st.selectbox("Aggregation", ["mean", "sum", "median"], index=0)
             agg_label = agg_func
-            plot_df = (
-                filtered.groupby(x_col, dropna=True)[y_col]
-                .agg(agg_func)
-                .reset_index(name="value")
-            )
+        plot_df = (
+            filtered.groupby(x_col, dropna=True)[y_col]
+            .agg(agg_label)
+            .reset_index(name="value")
+        )
 
     x_dtype = "T" if is_datetime64_any_dtype(filtered[x_col]) else "O"
     if chart_type == "Line" and x_dtype == "O":
-        st.info("Line charts work best with time or numeric X axes. Consider a bar chart if X is categorical.")
+        st.info("💡 Tip: Line charts work best with time or numeric X axes. Consider a bar chart if X is categorical.")
 
     st.markdown(f"**Chart:** {agg_label.capitalize()} of {y_col if y_col != '(count)' else 'reviews'} by {x_col}")
     
-    chart = (
-        alt.Chart(plot_df)
-        .mark_bar(color="#4c78a8")
-        .encode(
-            x=alt.X(f"{x_col}:{x_dtype}", title=x_col),
-            y=alt.Y("value:Q", title=f"{agg_label} of {y_col if y_col != '(count)' else 'rows'}"),
-            tooltip=[alt.Tooltip(f"{x_col}:{x_dtype}", title=x_col), alt.Tooltip("value:Q", title=agg_label)],
-        )
-        .properties(height=320)
-    )
-
-    if chart_type == "Line":
-        chart = chart.mark_line(point=True, color="#1f77b4")
+    # Economist-style minimalist color palette
+    chart_color = "#6b6b6b"  # Subtle grey
+    accent_color = "#003d7a"  # Deep blue accent
+    
+    chart = alt.Chart(plot_df).encode(
+        x=alt.X(f"{x_col}:{x_dtype}", title=x_col),
+        y=alt.Y("value:Q", title=f"{agg_label} of {y_col if y_col != '(count)' else 'rows'}"),
+        tooltip=[alt.Tooltip(f"{x_col}:{x_dtype}", title=x_col), alt.Tooltip("value:Q", title=agg_label)],
+    ).properties(height=320)
+    
+    # Apply chart type
+    if chart_type == "Bar":
+        chart = chart.mark_bar(color=chart_color)
+    elif chart_type == "Line":
+        chart = chart.mark_line(point=True, color=chart_color, interpolate='monotone')
+    elif chart_type == "Area":
+        chart = chart.mark_area(color=chart_color, opacity=0.6, interpolate='monotone')
+    elif chart_type == "Scatter":
+        chart = chart.mark_point(color=accent_color, size=100)
+    elif chart_type == "Box Plot":
+        # Box plots require raw data, not aggregated
+        if y_col != "(count)":
+            chart = alt.Chart(filtered).encode(
+                x=alt.X(f"{x_col}:{x_dtype}", title=x_col),
+                y=alt.Y(f"{y_col}:Q", title=y_col),
+                tooltip=[alt.Tooltip(f"{x_col}:{x_dtype}", title=x_col), alt.Tooltip(f"{y_col}:Q", title=y_col)],
+            ).mark_boxplot(color=chart_color).properties(height=320)
+        else:
+            st.warning("📊 Box plots require a numeric Y axis. Please select a metric instead of (count).")
 
     st.altair_chart(chart, use_container_width=True)
     
     st.markdown(generate_chart_insight(filtered, x_col, y_col, agg_label))
-    st.markdown(generate_ai_insight(filtered, x_col, y_col, agg_label))
+    # Get selected AI model from session state (default to auto)
+    selected_model = st.session_state.get("selected_ai_model", "auto")
+    st.markdown(generate_ai_insight(filtered, x_col, y_col, agg_label, selected_model))
 
-with tab_text:
-    st.info(
-        generate_key_takeaways(filtered),
-        icon="💡"
-    )
-    st.subheader("Key Metrics")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total reviews", f"{len(filtered):,}")
-    col2.metric("Average rating", f"{filtered['rating'].mean():.2f}" if len(filtered) else "—")
-    col3.metric("% Positive (4-5)", f"{(filtered['rating'].ge(4).mean() * 100):.1f}%" if len(filtered) else "—")
-    col4.metric("Median length", f"{filtered['text_length'].median():.0f} chars" if len(filtered) else "—")
-
-    avg_rating = filtered["rating"].mean()
-    positive_pct = filtered["rating"].ge(4).mean() * 100
-    negative_pct = filtered["rating"].le(2).mean() * 100
-    st.markdown(
-        f"**Summary:** {len(filtered):,} reviews | "
-        f"Avg rating {avg_rating:.2f} | "
-        f"Positive (4–5) {positive_pct:.1f}% | "
-        f"Negative (1–2) {negative_pct:.1f}%"
-    )
-
-    st.subheader("Text length vs rating")
-    st.caption("Explore if longer reviews tend to receive higher or lower ratings.")
-    text_length_chart = (
-        alt.Chart(filtered.dropna(subset=["rating", "text_length"]))
-        .mark_circle(size=60, opacity=0.35, color="#8c564b")
-        .encode(
-            x=alt.X("rating:Q", title="Rating", scale=alt.Scale(domain=[1, 5])),
-            y=alt.Y("text_length:Q", title="Text length (characters)"),
-            tooltip=[
-                alt.Tooltip("rating:Q", title="Rating"),
-                alt.Tooltip("text_length:Q", title="Text length"),
-                alt.Tooltip("published_platform:N", title="Platform"),
-            ],
-        )
-        .properties(height=320)
-    )
-
-    trend_line = text_length_chart.transform_regression(
-        "rating",
-        "text_length",
-    ).mark_line(color="#1f77b4")
-
-    st.altair_chart(text_length_chart + trend_line, use_container_width=True)
-
-    st.subheader("Helpfulness insights")
-    st.caption("Understand which reviews are marked as helpful and what characteristics they share.")
-    helpful_data = filtered.dropna(subset=["rating", "helpful_votes", "text_length"])
-    helpful_cols = st.columns(2)
-
-    with helpful_cols[0]:
-        helpful_by_rating = (
-            helpful_data.groupby("rating", dropna=True)["helpful_votes"]
-            .mean()
-            .reset_index(name="avg_helpful")
-            .sort_values("rating")
-        )
-        helpful_rating_chart = (
-            alt.Chart(helpful_by_rating)
-            .mark_bar(color="#e377c2")
-            .encode(
-                x=alt.X("rating:O", title="Rating"),
-                y=alt.Y("avg_helpful:Q", title="Avg helpful votes"),
-                tooltip=["rating:O", alt.Tooltip("avg_helpful:Q", format=".2f")],
-            )
-            .properties(height=280)
-        )
-        st.altair_chart(helpful_rating_chart, use_container_width=True)
-
-    with helpful_cols[1]:
-        helpful_length_chart = (
-            alt.Chart(helpful_data)
-            .mark_circle(size=60, opacity=0.35, color="#7f7f7f")
-            .encode(
-                x=alt.X("text_length:Q", title="Text length (characters)"),
-                y=alt.Y("helpful_votes:Q", title="Helpful votes"),
-                tooltip=[
-                    alt.Tooltip("text_length:Q", title="Text length"),
-                    alt.Tooltip("helpful_votes:Q", title="Helpful votes"),
-                    alt.Tooltip("rating:Q", title="Rating"),
-                ],
-            )
-            .properties(height=280)
-        )
-        helpful_trend = helpful_length_chart.transform_regression(
-            "text_length",
-            "helpful_votes",
-        ).mark_line(color="#1f77b4")
-        st.altair_chart(helpful_length_chart + helpful_trend, use_container_width=True)
-
-    st.subheader("Keyword clouds")
-    st.caption("Discover the most frequently mentioned words in positive and negative reviews.")
-    base_stopwords = set(STOPWORDS) if STOPWORDS else set()
-    base_stopwords.update(
-        {
-            "singapore",
-            "airlines",
-            "airline",
-            "flight",
-            "flights",
-            "crew",
-            "seat",
-            "seats",
-            "plane",
-            "aircraft",
-        }
-    )
-
-    pos_reviews = filtered[filtered["rating"].between(4, 5)]["text"]
-    neg_reviews = filtered[filtered["rating"].between(1, 2)]["text"]
-
-    pos_col, neg_col = st.columns(2)
-    with pos_col:
-        st.subheader("Positive reviews (4–5)")
-        render_wordcloud(pos_reviews, base_stopwords, "Top positive keywords")
-    with neg_col:
-        st.subheader("Negative reviews (1–2)")
-        render_wordcloud(neg_reviews, base_stopwords, "Top negative keywords")
-
-    st.subheader("Title vs full review keywords")
-    title_col, text_col = st.columns(2)
-    with title_col:
-        st.subheader("Titles")
-        render_wordcloud(filtered["title"], base_stopwords, "Top title keywords")
-    with text_col:
-        st.subheader("Full reviews")
-        render_wordcloud(filtered["text"], base_stopwords, "Top full-review keywords")
