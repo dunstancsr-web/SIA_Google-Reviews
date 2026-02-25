@@ -704,6 +704,56 @@ with st.sidebar:
         # Map radio selection to model choice
         model_map = {"Auto": "auto", "Groq (Cloud)": "groq", "Ollama (Local)": "ollama"}
         st.session_state.selected_ai_model = model_map[ai_model_choice]
+    
+    with st.expander("", expanded=False):
+        st.caption("Hidden Feature - Columns Selection: Select which columns to include in your download (Above filters select which rows to include, this selects which columns).")
+        
+        # Initialize checkbox states on first load
+        for col in COLUMN_ORDER:
+            checkbox_key = f"col_checkbox_{col}"
+            if checkbox_key not in st.session_state:
+                st.session_state[checkbox_key] = True  # Default all to checked
+        
+        # Initialize selected_columns if not set
+        if "selected_columns" not in st.session_state:
+            st.session_state.selected_columns = list(COLUMN_ORDER)
+        
+        # Toggle Select All / Deselect All button
+        all_selected = len(st.session_state.selected_columns) == len(COLUMN_ORDER)
+        button_label = "Deselect All" if all_selected else "Select All"
+        button_help = "Uncheck all columns" if all_selected else "Check all columns"
+        
+        if st.button(button_label, key="toggle_all", use_container_width=True, help=button_help):
+            if all_selected:
+                st.session_state.selected_columns = []
+                # Update all checkbox states to unchecked
+                for col in COLUMN_ORDER:
+                    st.session_state[f"col_checkbox_{col}"] = False
+            else:
+                st.session_state.selected_columns = list(COLUMN_ORDER)
+                # Update all checkbox states to checked
+                for col in COLUMN_ORDER:
+                    st.session_state[f"col_checkbox_{col}"] = True
+            st.rerun()
+        
+        # Checkbox list for column selection
+        st.markdown("**Columns to export:**")
+        
+        # Render checkboxes and build selected columns list
+        selected_cols = []
+        for col in COLUMN_ORDER:
+            if st.checkbox(col, key=f"col_checkbox_{col}"):
+                selected_cols.append(col)
+        
+        # Update session state with current selection
+        st.session_state.selected_columns = selected_cols
+        
+        # Visual feedback
+        col_count = len(st.session_state.selected_columns)
+        if col_count == 0:
+            st.warning("⚠️ Select at least one column")
+        else:
+            st.caption(f"✓ {col_count} of {len(COLUMN_ORDER)} columns selected")
 
 
 
@@ -711,15 +761,23 @@ date_filter = date_range
 filtered = apply_filters(df, date_filter, rating_range, platforms)
 
 with download_container:
-
+    # Get selected columns or use all if none selected
+    download_cols = st.session_state.get("selected_columns", list(COLUMN_ORDER))
+    if not download_cols:
+        download_cols = list(COLUMN_ORDER)
+    
+    # Filter dataframe to selected columns
+    download_df = filtered[download_cols]
+    col_count = len(download_cols)
+    
     st.download_button(
-        "⬇ Download filtered data",
-        data=to_csv_bytes(filtered),
+        f"⬇ Download filtered .csv file ({col_count} column{'s' if col_count != 1 else ''})",
+        data=to_csv_bytes(download_df),
         file_name="sia_reviews_filtered.csv",
         mime="text/csv",
         width="stretch",
         type="primary",
-        help="Export the reviews that match your filters.",
+        help=f"Export {len(filtered):,} reviews with {col_count} selected columns",
     )
 
 if len(filtered) == 0:
