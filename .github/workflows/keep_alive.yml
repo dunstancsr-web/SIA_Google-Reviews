@@ -12,4 +12,11 @@ jobs:
     steps:
       - name: Ping the Streamlit App
         run: |
-          curl -L -s -o /dev/null -w "%{http_code}" https://reviewsdataverse.streamlit.app
+          status=$(curl -L -s -o /dev/null -w "%{http_code}" https://reviewsdataverse.streamlit.app)
+          if [[ "$status" =~ ^2|^3 ]]; then
+            echo "App responded with $status, treating as success."
+            exit 0
+          else
+            echo "App responded with $status, treating as failure."
+            exit 1
+          fi
