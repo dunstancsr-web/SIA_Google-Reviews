@@ -10,13 +10,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Ping the Streamlit App
+      - name: Check if Streamlit App is alive
         run: |
-          status=$(curl -L -s -o /dev/null -w "%{http_code}" https://reviewsdataverse.streamlit.app)
-          if [[ "$status" =~ ^2|^3 ]]; then
-            echo "App responded with $status, treating as success."
-            exit 0
-          else
-            echo "App responded with $status, treating as failure."
-            exit 1
-          fi
+          for i in {1..5}; do
+            status=$(curl -L -s -o /dev/null -w "%{http_code}" https://reviewsdataverse.streamlit.app)
+            if [[ "$status" =~ ^2|^3 ]]; then
+              echo "App responded with $status, treating as success."
+              exit 0
+            else
+              echo "Attempt $i: App responded with $status, retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          echo "App did not respond with success after retries, treating as failure."
+          exit 1
