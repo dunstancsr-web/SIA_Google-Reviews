@@ -12,4 +12,4 @@ jobs:
     steps:
       - name: Ping the Streamlit App
         run: |
-          curl -s -o /dev/null -w "%{http_code}" https://reviewsdataverse.streamlit.app
+          curl -L -s -o /dev/null -w "%{http_code}" https://reviewsdataverse.streamlit.app
