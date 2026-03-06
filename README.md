@@ -1,3 +1,18 @@
+---
+title: Singapore Airlines Review Dashboard
+emoji: ✈️
+colorFrom: blue
+colorTo: yellow
+sdk: streamlit
+app_file: dashboardv2.py
+pinned: false
+---
+> **Note to self:** The block above is for Hugging Face settings. 
+> Do not delete it or the app won't boot.
+
+
+
+
 # Singapore Airlines Review Dashboard
 
 An interactive Streamlit dashboard for analyzing Singapore Airlines customer reviews with AI-powered insights.
