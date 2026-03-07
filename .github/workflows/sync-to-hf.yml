@@ -8,17 +8,39 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code with full history
+      - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Get full history, not just latest commit
-          lfs: true       # Enable Git LFS for large files
+          fetch-depth: 1
+          lfs: false
+
+      - name: Ensure Git LFS is installed
+        run: |
+          if ! command -v git-lfs >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git-lfs
+          fi
         
-      - name: Push to Hugging Face
+      - name: Push snapshot to Hugging Face
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # Add HF as a remote
-          git remote add space https://huggingface.co/spaces/dunstancsr/reviewsdataverse.streamlit
-          # Push to HF with force to overwrite
-          git push https://dunstancsr:$HF_TOKEN@huggingface.co/spaces/dunstancsr/reviewsdataverse.streamlit main --force
+          # Build a clean snapshot repo so HF does not receive old large-file history.
+          tmp_dir="$(mktemp -d)"
+          git archive --format=tar main | tar -xf - -C "$tmp_dir"
+
+          cd "$tmp_dir"
+          git init
+          git checkout -b main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Track media artifacts with LFS to satisfy HF's 10 MiB git blob limit.
+          git lfs install --local
+          git lfs track "*.webm" "*.mp4" "*.mov"
+
+          git add .
+          git commit -m "Sync from GitHub ${GITHUB_SHA}"
+
+          git remote add space "https://dunstancsr:${HF_TOKEN}@huggingface.co/spaces/dunstancsr/reviewsdataverse.streamlit"
+          git push --force space main
