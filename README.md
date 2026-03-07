@@ -51,10 +51,30 @@ An interactive Streamlit dashboard for analyzing Singapore Airlines customer rev
 
 4. **Run Streamlit**:
    ```bash
-   streamlit run dashboardv2.py
+   make run
    ```
 
 Dashboard opens at `http://localhost:8501`
+
+### Local Run Commands (Quick Reference for running Streamlit locally on desktop)
+
+1. Open a terminal.
+2. Go to the project folder:
+   ```bash
+   cd /Users/stan/Documents/GitHub/GA_DAB_9.04_Codex-Dashboard
+   ```
+3. Use one of these commands:
+   ```bash
+   make run
+   make status
+   make stop
+   ```
+
+Note: Copy only the command lines inside the code block. Do not copy the ` ```bash ` or closing ` ``` ` markers.
+
+- `make run`: Start the dashboard on `127.0.0.1:8501`.
+- `make status`: Check if anything is listening on port `8501`.
+- `make stop`: Stop the local dashboard process on port `8501`.
 
 ### Optional: Local AI (Ollama)
 
@@ -77,7 +97,7 @@ For offline AI insights without Groq API:
 
 4. **Run dashboard** (no GROQ_API_KEY needed):
    ```bash
-   streamlit run dashboardv2.py
+   make run
    ```
 
 App auto-detects Ollama and uses it for AI insights. If both Groq and Ollama are available, Groq takes priority.

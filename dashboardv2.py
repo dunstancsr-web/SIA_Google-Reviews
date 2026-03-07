@@ -593,7 +593,7 @@ def render_wordcloud(text_series, stopwords, title):
         collocations=False,
     ).generate(text)
     st.write(title)
-    st.image(wc.to_array(), width="stretch")
+    st.image(wc.to_array(), use_container_width=True)
 
 st.markdown(
     """
@@ -649,7 +649,7 @@ with st.sidebar:
             if fixed_end_date > month_starts[-1]:
                 fixed_end_date = month_starts[-1]
 
-            if st.button("↺ Reset", key="reset_date", width="stretch"):
+            if st.button("↺ Reset", key="reset_date", use_container_width=True):
                 st.session_state["date_range_slider"] = (fixed_start_date, fixed_end_date)
 
             stored_range = st.session_state.get("date_range_slider")
@@ -775,7 +775,7 @@ with download_container:
         data=to_csv_bytes(download_df),
         file_name="sia_reviews_filtered.csv",
         mime="text/csv",
-        width="stretch",
+        use_container_width=True,
         type="primary",
         help=f"Export {len(filtered):,} reviews with {col_count} selected columns",
     )
@@ -838,7 +838,7 @@ with tab_export:
         recommendation_df = build_download_recommendations(filtered)
         st.dataframe(
             recommendation_df,
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -851,7 +851,7 @@ with tab_export:
     dict_df = build_data_dictionary(df)
     st.dataframe(
         dict_df,
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
         column_config={
             "#": st.column_config.NumberColumn(width="small"),
@@ -888,7 +888,7 @@ with tab_export:
         sample_df = base_df.iloc[start_idx:end_row]
     st.dataframe(
         sample_df,
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
@@ -924,7 +924,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(volume_chart, width="stretch")
+        st.altair_chart(volume_chart, use_container_width=True)
 
     with trend_cols[1]:
         rating_trend_chart = (
@@ -940,7 +940,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(rating_trend_chart, width="stretch")
+        st.altair_chart(rating_trend_chart, use_container_width=True)
 
     st.subheader("Ratings & sentiment")
     st.caption("See how reviews are distributed across ratings and overall sentiment breakdown.")
@@ -957,13 +957,13 @@ with tab_overview:
             alt.Chart(rating_counts)
             .mark_bar(color="#1f77b4")
             .encode(
-                x=alt.X("rating:O", title="Rating"),
+                x=alt.X("rating:O", title="Rating", axis=alt.Axis(labelAngle=0)),
                 y=alt.Y("count:Q", title="Reviews"),
                 tooltip=["rating:O", "count:Q"],
             )
             .properties(height=280)
         )
-        st.altair_chart(rating_chart, width="stretch")
+        st.altair_chart(rating_chart, use_container_width=True)
 
     with dist_cols[1]:
         sentiment_df = pd.DataFrame(
@@ -995,7 +995,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(sentiment_chart, width="stretch")
+        st.altair_chart(sentiment_chart, use_container_width=True)
 
     st.subheader("Where reviews come from")
     st.caption("Compare review volume and average ratings across different platforms.")
@@ -1018,7 +1018,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(platform_volume_chart, width="stretch")
+        st.altair_chart(platform_volume_chart, use_container_width=True)
 
     with platform_cols[1]:
         platform_avg = (
@@ -1037,7 +1037,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(platform_avg_chart, width="stretch")
+        st.altair_chart(platform_avg_chart, use_container_width=True)
 
     with st.expander("📝 Text Insights", expanded=False):
         st.subheader("Text length vs rating")
@@ -1062,7 +1062,7 @@ with tab_overview:
             "text_length",
         ).mark_line(color="#1f77b4")
 
-        st.altair_chart(text_length_chart + trend_line, width="stretch")
+        st.altair_chart(text_length_chart + trend_line, use_container_width=True)
 
         st.subheader("Helpfulness insights")
         st.caption("Understand which reviews are marked as helpful and what characteristics they share.")
@@ -1086,7 +1086,7 @@ with tab_overview:
                 )
                 .properties(height=280)
             )
-            st.altair_chart(helpful_rating_chart, width="stretch")
+            st.altair_chart(helpful_rating_chart, use_container_width=True)
 
         with helpful_cols[1]:
             helpful_length_chart = (
@@ -1107,7 +1107,7 @@ with tab_overview:
                 "text_length",
                 "helpful_votes",
             ).mark_line(color="#1f77b4")
-            st.altair_chart(helpful_length_chart + helpful_trend, width="stretch")
+            st.altair_chart(helpful_length_chart + helpful_trend, use_container_width=True)
 
         st.subheader("Keyword clouds")
         st.caption("Discover the most frequently mentioned words in positive and negative reviews.")
@@ -1172,7 +1172,7 @@ with tab_explore:
     preset_selected = None
     for idx, (preset_name, x, y, agg) in enumerate(presets):
         with preset_cols[idx % 3]:
-            if st.button(preset_name, width="stretch", help=f"Explore {preset_name.lower()}"):
+            if st.button(preset_name, use_container_width=True, help=f"Explore {preset_name.lower()}"):
                 preset_selected = (x, y, agg)
                 st.session_state.preset_choice = preset_selected
     
@@ -1270,7 +1270,7 @@ with tab_explore:
         else:
             st.warning("📊 Box plots require a numeric Y axis. Please select a metric instead of (count).")
 
-    st.altair_chart(chart, width="stretch")
+    st.altair_chart(chart, use_container_width=True)
     
     st.markdown(generate_chart_insight(filtered, x_col, y_col, agg_label))
     # Get selected AI model from session state (default to auto)
