@@ -8,8 +8,11 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout code with full history
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Get full history, not just latest commit
+          lfs: true       # Enable Git LFS for large files
         
       - name: Push to Hugging Face
         env:
@@ -17,5 +20,5 @@ jobs:
         run: |
           # Add HF as a remote
           git remote add space https://huggingface.co/spaces/dunstancsr/reviewsdataverse.streamlit
-          # Push to HF (replace with your details!)
+          # Push to HF with force to overwrite
           git push https://dunstancsr:$HF_TOKEN@huggingface.co/spaces/dunstancsr/reviewsdataverse.streamlit main --force
