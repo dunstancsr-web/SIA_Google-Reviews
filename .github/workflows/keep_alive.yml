@@ -11,4 +11,4 @@ jobs:
     steps:
       - name: Ping Hugging Face Space
         run: |
-          curl -I -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36" YOUR_SPACE_URL
+          curl -I -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36" https://huggingface.co/spaces/dunstancsr/reviewsdataverse.streamlit
