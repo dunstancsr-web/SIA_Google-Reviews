@@ -2,7 +2,8 @@ name: Global Dashboard Keep-Alive
 
 on:
   schedule:
-    - cron: '0 */5 * * *'
+    # This runs exactly every 6 hours (4x per day)
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -28,18 +29,21 @@ jobs:
             const page = await browser.newPage();
             console.log('Navigating to Portfolio page...');
             
-            // Wait until the main page structure is ready
-            await page.goto('https://dunstancsr-web.github.io/DunstanPortfolio/portfolio-reels.html', { 
-              waitUntil: 'networkidle',
-              timeout: 60000 
-            });
-            
-            console.log('Main page loaded. Holding connection for 15s to wake all dashboards...');
-            
-            // This delay is critical for the iframes inside to finish their 'heartbeat'
-            await new Promise(r => setTimeout(r, 15000)); 
-            
-            console.log('Success: All dashboards have been poked.');
-            await browser.close();
+            try {
+              // Using 'load' instead of 'networkidle' to avoid timeouts
+              await page.goto('https://dunstancsr-web.github.io/DunstanPortfolio/portfolio-reels.html', { 
+                waitUntil: 'load',
+                timeout: 90000 
+              });
+              
+              console.log('Page loaded. Waiting 30s for iframes to initialize...');
+              await new Promise(r => setTimeout(r, 30000)); 
+              
+              console.log('Success: All dashboards poked.');
+            } catch (error) {
+              console.error('Navigation note:', error.message);
+            } finally {
+              await browser.close();
+            }
           })();
           "
