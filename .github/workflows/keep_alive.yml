@@ -1,14 +1,45 @@
-name: Keep Hugging Face Space Awake
+name: Global Dashboard Keep-Alive
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
-  workflow_dispatch: 
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
 
 jobs:
-  ping:
+  browser-visit:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Hugging Face Space
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
         run: |
-          curl -I -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36" https://dunstancsr-web.github.io/DunstanPortfolio/portfolio-reels.html
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Visit Portfolio and Wake All Iframes
+        run: |
+          node -e "
+          const { chromium } = require('playwright');
+          (async () => {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            console.log('Navigating to Portfolio page...');
+            
+            // Wait until the main page structure is ready
+            await page.goto('https://dunstancsr-web.github.io/DunstanPortfolio/portfolio-reels.html', { 
+              waitUntil: 'networkidle',
+              timeout: 60000 
+            });
+            
+            console.log('Main page loaded. Holding connection for 15s to wake all dashboards...');
+            
+            // This delay is critical for the iframes inside to finish their 'heartbeat'
+            await new Promise(r => setTimeout(r, 15000)); 
+            
+            console.log('Success: All dashboards have been poked.');
+            await browser.close();
+          })();
+          "
