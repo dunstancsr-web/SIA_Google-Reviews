@@ -1455,7 +1455,7 @@ with tab_ml_predict:
                             client = Groq(api_key=api_key)
                             resp = client.chat.completions.create(
                                 messages=[{"role": "system", "content": "You are a JSON API. Output raw JSON array only, no markdown."}, {"role": "user", "content": prompt}],
-                                model="llama3-8b-8192", temperature=0
+                                model="llama-3.1-8b-instant", temperature=0
                             )
                             llm_out = resp.choices[0].message.content
                         else:
