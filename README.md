@@ -35,7 +35,7 @@ An interactive Streamlit dashboard for analyzing Singapore Airlines customer rev
 
 1. **Clone/navigate to project**:
    ```bash
-   cd ~/Documents/GA_DAB_9.04_Codex-Dashboard
+   cd ~/Documents/GitHub/SIA_Google-Reviews
    ```
 
 2. **Activate virtual environment**:
@@ -61,7 +61,7 @@ Dashboard opens at `http://localhost:8501`
 1. Open a terminal.
 2. Go to the project folder:
    ```bash
-   cd /Users/stan/Documents/GitHub/GA_DAB_9.04_Codex-Dashboard
+   cd /Users/stan/Documents/GitHub/SIA_Google-Reviews
    ```
 3. Use one of these commands:
    ```bash
