@@ -2,6 +2,62 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
+import pickle
+import os
+import re
+import nltk
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import numpy as np
+import html
+import json
+import textwrap
+
+os.makedirs('./nltk_data', exist_ok=True)
+nltk.data.path.append('./nltk_data')
+try:
+    nltk.download('vader_lexicon', download_dir='./nltk_data', quiet=True)
+except Exception:
+    pass
+
+@st.cache_resource
+def load_ml_models():
+    """
+    Loads all available 'Strict Mode' Pipeline models and the Aspect Engine in a structured way.
+    """
+    try:
+        models = {} # Star Rating Models
+        aspect_model = None
+        
+        model_files = {
+            "Logistic Regression": "models/lr_model.pkl",
+            "Random Forest": "models/rf_model.pkl",
+            "Linear SVM": "models/svc_model.pkl"
+        }
+        
+        for name, path in model_files.items():
+            if os.path.exists(path):
+                with open(path, 'rb') as f:
+                    m = pickle.load(f)
+                    if name == "Logistic Regression":
+                        clf_step = m.named_steps.get('clf')
+                        if clf_step and not hasattr(clf_step, 'multi_class'):
+                            clf_step.multi_class = 'auto'
+                    models[name] = m
+                    
+        # Load the Autonomous Aspect Engine separately
+        aspect_path = "models/aspect_model.pkl"
+        if os.path.exists(aspect_path):
+            with open(aspect_path, 'rb') as f:
+                aspect_model = pickle.load(f)
+                    
+        return {"rating": models, "aspect": aspect_model}
+    except Exception as e:
+        return {"rating": {}, "aspect": None}
+
+@st.cache_resource
+def get_vader_analyzer():
+    return SentimentIntensityAnalyzer()
+
 
 st.set_page_config(page_title="Self‑Service Data Hub", page_icon="SIA", layout="wide")
 
@@ -167,6 +223,67 @@ st.markdown(
         .title-hover-wrap:hover .title-hover-tooltip {
             visibility: visible;
             opacity: 1;
+        }
+        .stButton button:active {
+            transform: scale(0.98);
+        }
+        
+        /* Premium Verdict Hero CSS */
+        .verdict-hero {
+            padding: 1.5rem;
+            border-radius: 12px;
+            border-left: 8px solid #D4AF37;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .verdict-hero-title {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: #4b5563;
+        }
+        .verdict-score-big {
+            font-size: 3.5rem;
+            font-weight: 800;
+            line-height: 1;
+            margin-right: 1rem;
+        }
+        
+        /* Consensus Progress Bar */
+        .consensus-container {
+            margin-top: 1rem;
+            background: rgba(255, 255, 255, 0.5);
+            padding: 1rem;
+            border-radius: 8px;
+        }
+        .consensus-track {
+            height: 12px;
+            background-color: #e5e7eb;
+            border-radius: 6px;
+            width: 100%;
+            overflow: hidden;
+            position: relative;
+            margin-top: 0.5rem;
+        }
+        .consensus-fill {
+            height: 100%;
+            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        /* Actionable Chips */
+        .sia-chip {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(0,0,0,0.1);
+            background-color: #ffffff;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
     </style>
     """,
@@ -796,8 +913,8 @@ time_series = (
     .reset_index()
 )
 
-tab_overview, tab_explore, tab_export = st.tabs(
-    ["Overview", "Data Exploration", "Data & Export"]
+tab_overview, tab_explore, tab_export, tab_ml_predict, tab_ml_feature, tab_ml_mismatch = st.tabs(
+    ["Overview", "Data Exploration", "Data & Export", "ML: Predict Rating", "ML: Feature Importance", "ML: Hidden Dissatisfaction"]
 )
 
 with tab_export:
@@ -1276,4 +1393,561 @@ with tab_explore:
     # Get selected AI model from session state (default to auto)
     selected_model = st.session_state.get("selected_ai_model", "auto")
     st.markdown(generate_ai_insight(filtered, x_col, y_col, agg_label, selected_model))
+
+models = load_ml_models()
+
+with tab_ml_predict:
+    st.caption("Predict rating using 'Strict Mode' Multi-Feature Pipelines (Balanced Data + Lexical Sentiment)")
+    
+    if not models:
+        st.error("ML models not found. Please run `train_model.py` first.")
+    else:
+        # Define aspect taxonomy
+        ASPECT_TAXONOMY = {
+            "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
+            "Seat & Comfort": ["seat", "comfort", "legroom", "recline", "space", "cramped", "narrow", "sleep", "bed", "aisle", "window", "sore", "uncomfortable"],
+            "Staff & Service": ["crew", "staff", "attendant", "steward", "stewardess", "rude", "friendly", "polite", "helpful", "service", "smile", "ignored", "professional", "attendants"],
+            "Flight Punctuality": ["delay", "delayed", "late", "wait", "cancel", "cancelled", "hours", "schedule", "missed", "connection", "waiting"],
+            "Baggage Handling": ["baggage", "bag", "luggage", "lost", "belt", "claim", "carousel", "damaged"],
+            "Inflight Entertainment": ["wifi", "internet", "movie", "screen", "krisworld", "tv", "entertainment", "monitor", "headphone", "movies"],
+            "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment", "error", "counter", "boarding", "ticket", "tickets"]
+        }
+        
+        def extract_aspect_tags(text, use_llm=True):
+            analyzer = get_vader_analyzer()
+            # Split text keeping delimiters to reconstruct original text
+            segments = re.split(r'([.!?\n]+)', text)
+            
+            # --- CONTEXT-AWARE LLM UPGRADE ---
+            llm_sentiments = {} # Dictionary mapping segment index -> (topics_list, sentiment_score)
+            
+            model_choice = st.session_state.get("selected_ai_model", "auto")
+            api_key = os.environ.get("GROQ_API_KEY", "")
+            use_groq = (model_choice == "groq" and api_key) or (model_choice == "auto" and api_key)
+            use_ollama = (model_choice == "ollama") or (model_choice == "auto" and not api_key)
+            
+            if use_llm and (use_groq or use_ollama):
+                valid_sentences = []
+                for idx, seg in enumerate(segments):
+                    if seg.strip() and not re.fullmatch(r'[.!?\n]+', seg):
+                        words = set(re.findall(r'\b\w+\b', seg.lower()))
+                        if words:
+                            valid_sentences.append({"id": idx, "text": seg.strip()})
+                            
+                if valid_sentences:
+                    prompt = (
+                        "You are an expert aviation operations analyst. Your task is to perform STRICT aspect-based sentiment analysis on sentences from a Singapore Airlines review.\n\n"
+                        "RULES:\n"
+                        "1. Only assign a topic if the sentence explicitly discusses it. Valid topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
+                        "2. Sentiment (Positive, Negative, Neutral) MUST be evaluated from the perspective of Singapore Airlines (SIA).\n"
+                        "3. EXPLICIT COMPARISONS: If a customer says 'other airlines have better food' or 'crew on XYZ airline did a much better job', this is a strictly NEGATIVE sentiment for SIA.\n"
+                        "4. SARCASM: 'Great job losing my luggage' or 'Thanks for the 5 hour delay' are strictly NEGATIVE.\n"
+                        "5. FACTUAL: If a sentence is purely factual ('I booked a flight to London'), return empty topics [].\n\n"
+                        "INPUT SENTENCES:\n"
+                    )
+                    prompt += json.dumps(valid_sentences) + "\n\n"
+                    prompt += 'Respond ONLY with a JSON array mapping the ids exactly. Do not include markdown. Example:\n[{"id": 0, "topics": ["Staff & Service"], "sentiment": "Negative"}]'
+                    
+                    try:
+                        llm_out = ""
+                        if use_groq:
+                            from groq import Groq
+                            client = Groq(api_key=api_key)
+                            resp = client.chat.completions.create(
+                                messages=[{"role": "system", "content": "You are a JSON API. Output raw JSON array only, no markdown."}, {"role": "user", "content": prompt}],
+                                model="llama3-8b-8192", temperature=0
+                            )
+                            llm_out = resp.choices[0].message.content
+                        else:
+                            import requests
+                            res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output bare JSON array only.", "stream": False}, timeout=60)
+                            if res.status_code != 200:
+                                raise Exception(f"Ollama returned {res.status_code}: {res.text}")
+                            llm_out = res.json().get("response", "")
+                            
+                        if not llm_out.strip():
+                            raise Exception("LLM returned an entirely blank string.")
+                            
+                        # Robust JSON array extraction
+                        start_idx = llm_out.find('[')
+                        end_idx = llm_out.rfind(']')
+                        
+                        if start_idx == -1 or end_idx == -1:
+                            raise Exception(f"Failed to find JSON boundaries in LLM response: {llm_out[:100]}...")
+                            
+                        clean_json = llm_out[start_idx:end_idx+1]
+                        
+                        try:
+                            annotations = json.loads(clean_json)
+                        except json.JSONDecodeError:
+                            # Targeted Repair: Fix single quoted keys and values like 'topics': ['Food']
+                            repaired = re.sub(r"\'(\w+)\'(\s*:)", r'"\1"\2', clean_json) # Keys
+                            repaired = re.sub(r":\s*\'(.*?)\'", r': "\1"', repaired) # Values
+                            annotations = json.loads(repaired)
+                        
+                        for ann in annotations:
+                            sent_str = ann.get("sentiment", "Neutral")
+                            score = 0.0
+                            if "positive" in sent_str.lower(): score = 0.5
+                            elif "negative" in sent_str.lower(): score = -0.5
+                            llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
+                    except Exception as e:
+                        st.toast(f"LLM Parsing Error: {e} | Reverting to VADER lexicon", icon="⚠️")
+                        pass # Fallback cleanly to VADER lexicons if LLM fails
+            # ----------------------------------
+            
+            aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
+            aspect_lengths = {category: 0 for category in ASPECT_TAXONOMY}
+            sentiment_lengths = {"Positive": 0, "Negative": 0, "Neutral": 0}
+            general_length = 0
+            
+            highlighted_html = []
+            
+            for idx, segment in enumerate(segments):
+                if not segment.strip() or re.fullmatch(r'[.!?\n]+', segment):
+                    # Replace pure newlines with <br> for HTML rendering, escape others
+                    clean_seg = html.escape(segment).replace('\n', '<br>')
+                    highlighted_html.append(clean_seg)
+                    continue
+                    
+                words = set(re.findall(r'\b\w+\b', segment.lower()))
+                if not words:
+                    highlighted_html.append(html.escape(segment))
+                    continue
+                
+                sent_len = len(segment)
+                matched_cats = []
+                sent_score = 0.0
+                
+                # Fetch contextual tags from LLM dict first
+                if idx in llm_sentiments:
+                    topics, sent_score = llm_sentiments[idx]
+                    for t in topics:
+                        for key in ASPECT_TAXONOMY.keys():
+                            if t.lower().replace("&", "") in key.lower().replace("&", ""):
+                                if key not in matched_cats: matched_cats.append(key)
+                                
+                # If LLM failed, missed it, or wasn't used, fallback to Autonomous ML Engine or Keyword matching
+                if not matched_cats and idx not in llm_sentiments:
+                    sent_score = analyzer.polarity_scores(segment)['compound']
+                    
+                    # --- AUTONOMOUS ML ENGINE UPGRADE ---
+                    if aspect_engine:
+                        # Multi-label prediction
+                        try:
+                            # The model expects a list/Series of strings
+                            pred_binary = aspect_engine.predict([segment.lower()])[0]
+                            categories_list = list(ASPECT_TAXONOMY.keys())
+                            for i, val in enumerate(pred_binary):
+                                if val == 1:
+                                    matched_cats.append(categories_list[i])
+                        except:
+                            pass
+                    
+                    # Final fallback to standard keywords if ML engine failed or is missing
+                    if not matched_cats:
+                        for category, keywords in ASPECT_TAXONOMY.items():
+                            if any(kw in words for kw in keywords):
+                                matched_cats.append(category)
+                
+                # Track sentiment distribution lengths
+                if sent_score > 0.1: sentiment_lengths["Positive"] += sent_len
+                elif sent_score < -0.1: sentiment_lengths["Negative"] += sent_len
+                else: sentiment_lengths["Neutral"] += sent_len
+                
+                segment_safe = html.escape(segment)
+                
+                if matched_cats:
+                    # Distribute length
+                    split_len = sent_len / len(matched_cats)
+                    for cat in matched_cats:
+                        aspect_scores[cat].append(sent_score)
+                        aspect_lengths[cat] += split_len
+                        
+                    # Build highlight HTML
+                    tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px; white-space: nowrap;'>{c}</span>" for c in matched_cats])
+                    
+                    # Sentiment color for the block background
+                    bg_color = "#f3f4f6" # neutral gray
+                    border_color = "#e5e7eb"
+                    if sent_score > 0.1:
+                        bg_color = "#dcfce7" # subtle green
+                        border_color = "#bbf7d0"
+                    elif sent_score < -0.1:
+                        bg_color = "#fee2e2" # subtle red
+                        border_color = "#fecaca"
+                        
+                    highlight = f"<span style='background-color: {bg_color}; border: 1px solid {border_color}; padding: 2px 4px; border-radius: 6px; line-height: 2.2;'>{segment_safe}{tags_html}</span>"
+                    highlighted_html.append(highlight)
+                else:
+                    general_length += sent_len
+                    highlighted_html.append(segment_safe)
+            
+            final_tags = []
+            distribution = []
+            total_len = sum(aspect_lengths.values()) + general_length
+            
+            for category, scores in aspect_scores.items():
+                if scores:
+                    # Average the sentiment across all sentences mentioning this aspect
+                    avg_score = sum(scores) / len(scores)
+                    if avg_score > 0.05:
+                        final_tags.append(f"🟢 {category}")
+                    elif avg_score < -0.05:
+                        final_tags.append(f"🔴 {category}")
+                    else:
+                        final_tags.append(f"⚪ {category}")
+                        
+                if aspect_lengths[category] > 0:
+                    share = aspect_lengths[category] / total_len if total_len else 0
+                    distribution.append({"Topic": category, "Share (%)": share})
+                    
+            if general_length > 0:
+                share = general_length / total_len if total_len else 0
+                distribution.append({"Topic": "General Feedback", "Share (%)": share})
+            
+            # Sentiment breakdown distribution
+            sent_distribution = []
+            sentiment_total = sum(sentiment_lengths.values())
+            for sent_type, s_len in sentiment_lengths.items():
+                if sentiment_total > 0:
+                    sent_distribution.append({"Sentiment": sent_type, "Percentage": s_len / sentiment_total})
+                
+            annotated_text = "".join(highlighted_html)
+            return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text
+            
+        # Global Model Handling for this Tab
+        model_bundle = load_ml_models()
+        rating_models = model_bundle.get("rating", {})
+        aspect_engine = model_bundle.get("aspect")
+
+        with st.container():
+            st.caption("Paste a customer review below to predict the star rating and automatically route the feedback to the correct department.")
+            review_input = st.text_area("Customer Review Text", value="", height=140, placeholder="e.g., The food was excellent but the flight was delayed by 3 hours...")
+            
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1.5])
+            with col_btn1:
+                if st.button("Analyze Review", type="primary", use_container_width=True):
+                    st.session_state["review_analyzed"] = True
+            
+            with col_btn2:
+                # Tournament Selection
+                if rating_models:
+                    selected_model_name = st.selectbox(
+                        "Primary Engine", 
+                        options=list(rating_models.keys()), 
+                        index=0,
+                        help="Choose which algorithm drives the main report. Logistic Regression is balanced, SVM is strict, RF is detailed."
+                    )
+                else:
+                    selected_model_name = "None"
+                    
+            with col_btn3:
+                use_llm = st.toggle("Enable Context-Aware AI Routing (Higher Accuracy)", value=True, help="Uses Groq/Ollama. If off, uses the local Autonomous ML Engine (Zero-Communication).")
+            
+            if st.session_state.get("review_analyzed") and review_input.strip() and rating_models:
+                input_clean = re.sub(r'[^a-z0-9\s]', '', review_input.lower()).strip()
+                vader_score = get_vader_analyzer().polarity_scores(review_input)['compound']
+                
+                # Create the DataFrame input expected by the ColumnTransformer Pipeline
+                X_input = pd.DataFrame({
+                    "clean_text": [input_clean],
+                    "vader_score": [vader_score]
+                })
+                
+                # --- TOURNAMENT PREDICTIONS ---
+                # Benchmarked Accuracies from recent Strictly Balanced training run
+                # We use these as weights for the "Optimized Consensus" score
+                benchmarks = {
+                    "Logistic Regression": 0.561,
+                    "Random Forest": 0.583,
+                    "Linear SVM": 0.579
+                }
+                
+                all_results = []
+                model_weighted_scores = []
+                total_weight = 0
+                
+                for name, m in rating_models.items():
+                    res = m.predict(X_input)[0]
+                    probs = m.predict_proba(X_input)[0]
+                    conf = max(probs)
+                    
+                    # Individual Weighted Rating
+                    weighted_rating = sum((i+1) * probs[i] for i in range(5))
+                    
+                    # Accumulate for Ensemble Consensus
+                    weight = benchmarks.get(name, 0.5)
+                    model_weighted_scores.append(weighted_rating * weight)
+                    total_weight += weight
+                    
+                    all_results.append({
+                        "Model": name, 
+                        "Predicted Rating": f"{res} ⭐", 
+                        "Individual Continuum": f"{weighted_rating:.2f} ⭐",
+                        "In-Text Confidence": f"{conf:.1%}",
+                        "Benchmark Accuracy": f"{weight*100:.1f}%"
+                    })
+                
+                # --- CONSENSUS CALCULATIONS ---
+                consensus_score = sum(model_weighted_scores) / total_weight if total_weight > 0 else 3.0
+                
+                # Divergence (Standard Deviation of the 3 model opinions)
+                # Helps identify ambiguous/challenging reviews
+                individual_ratings = [sum((i+1) * m.predict_proba(X_input)[0][i] for i in range(5)) for m in rating_models.values()]
+                divergence = np.std(individual_ratings) if len(individual_ratings) > 1 else 0
+                
+                consensus_agreement = "High" if divergence < 0.2 else ("Medium" if divergence < 0.5 else "Low (Ambiguous)")
+                
+                # Main Active Model (Selected by user for the detailed deep-dive)
+                active_model = rating_models.get(selected_model_name)
+                prediction = active_model.predict(X_input)[0]
+                probabilities = active_model.predict_proba(X_input)[0]
+                
+                # Aspect extraction
+                detected_tags, aspect_dist, sent_dist, annotated_text = extract_aspect_tags(review_input, use_llm=use_llm)
+                
+                st.divider()
+                
+                # --- 0. MULTI-MODEL TOURNAMENT SUMMARY ---
+                st.markdown("### 🧬 AI Model Tournament (Consensus Engine)")
+                st.table(all_results)
+                st.caption(f"The **Consensus Score** (Optimized) blends all models based on their verified accuracy.")
+                st.write("")
+                
+                # --- 1. THE PREMIUM VERDICT HERO (UI/UX) ---
+                # Determine colors based on prediction
+                if prediction >= 5:
+                    h_bg, h_border, h_text = "#fef9c3", "#ca8a04", "#854d0e" # Gold Theme
+                elif prediction >= 4:
+                    h_bg, h_border, h_text = "#f0fdf4", "#16a34a", "#166534" # Green Theme
+                elif prediction >= 3:
+                    h_bg, h_border, h_text = "#fffbeb", "#d97706", "#92400e" # Amber Theme
+                else:
+                    h_bg, h_border, h_text = "#fef2f2", "#dc2626", "#991b1b" # Red Theme
+                
+                # Agreement Badge HTML
+                agreement_colors = {"High": "#16a34a", "Medium": "#d97706", "Low (Ambiguous)": "#dc2626"}
+                ag_color = agreement_colors.get(consensus_agreement, "#4b5563")
+                
+                # Consensus Meter Percentage (Scale 1-5 to 0-100)
+                meter_pct = round(((consensus_score - 1) / 4) * 100, 1)
+                
+                # Calculate individual ticks for the progress bar (with hover labels)
+                ticks_html = ""
+                for name, m in rating_models.items():
+                    # Calculate individual model score
+                    m_score = sum((i+1) * m.predict_proba(X_input)[0][i] for i in range(5))
+                    tick_pos = round(((m_score - 1) / 4) * 100, 1)
+                    # Add a vertical marker with a hover tooltip identifying the model
+                    ticks_html += f'<div title="{name}: {m_score:.2f} Stars" style="position: absolute; left: {tick_pos}%; top: 0; width: 2px; height: 100%; background: rgba(255,255,255,0.7); z-index: 10; cursor: help;"></div>'
+                
+                # Pre-construct the Hero HTML to prevent F-string markdown confusion and collapse it to avoid parsing leaks
+                tags_html = "".join([f'<span class="sia-chip">{tag}</span>' for tag in detected_tags])
+                stars_display = "&#11088;" * int(prediction) # Use HTML entity for Star
+                
+                raw_html = f"""
+                <div class="verdict-hero" style="background-color: {h_bg}; border-left-color: {h_border};">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                            <div class="verdict-hero-title">Unified Consensus Analytics</div>
+                            <div style="display: flex; align-items: baseline;">
+                                <span class="verdict-score-big" style="color: {h_text};">{consensus_score:.2f}</span>
+                                <span style="font-size: 1.5rem; font-weight: 700; color: {h_text}; opacity: 0.7; margin-right: 1.5rem;">/ 5</span>
+                                <div style="display: flex; flex-direction: column;">
+                                    <div style="font-size: 1.5rem; color: {h_text};">{stars_display}</div>
+                                    <div style="font-size: 0.85rem; font-weight: 600; color: {ag_color}; background: rgba(255,255,255,0.7); padding: 2px 8px; border-radius: 4px; margin-top: 4px;">
+                                        ● {consensus_agreement} Agreement
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="verdict-hero-title">{selected_model_name} Confidence</div>
+                            <div style="font-size: 2.2rem; font-weight: 800; color: {h_text};">{max(probabilities):.1%}</div>
+                        </div>
+                    </div>
+                    <div class="consensus-container">
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 700; color: #4b5563;">
+                            <span>TOURNAMENT SPREAD (CONSENSUS)</span>
+                            <span>{consensus_score:.2f} / 5.0</span>
+                        </div>
+                        <div class="consensus-track">
+                            <div class="consensus-fill" style="width: {meter_pct}%; background-color: {h_border};"></div>
+                            {ticks_html}
+                        </div>
+                        <div style="font-size: 0.75rem; color: #6b7280; margin-top: 5px; font-style: italic;">
+                            The white markers indicate individual AI model "votes" across {len(models)} engines.
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem;">
+                    <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 0.5rem; color: #374151;">ACTIONABLE ROUTING TAGS:</div>
+                    <div>{tags_html}</div>
+                    <div style="font-size: 0.8rem; color: #6b7280; margin-top: 0.5rem;">These tags are used to automatically forward this feedback to the relevant operations teams.</div>
+                </div>
+                """
+                # The 'Nuclear' Fix: Remove all newlines and indentation to force the browser to treat it as one continuous HTML block
+                verdict_html = "".join([line.strip() for line in raw_html.split("\n")])
+                st.markdown(verdict_html, unsafe_allow_html=True)
+                
+                if consensus_agreement == "Low (Ambiguous)":
+                    st.warning("⚠️ **Model Divergence Detected:** The AI engines are in strong disagreement. This review has been flagged for manual administrative audit.", icon="🧐")
+                
+                st.write("")
+                
+                # --- 2. ANALYTICAL BREAKDOWN (THE 'WHY') ---
+                st.markdown("### 📊 Analytical Breakdown")
+                a_col1, a_col2 = st.columns([1, 1])
+                
+                with a_col1:
+                    if sent_dist:
+                        st.markdown("**Review Sentiment (Mood)**")
+                        sent_df = pd.DataFrame(sent_dist)
+                        sent_chart = alt.Chart(sent_df).mark_bar().encode(
+                            x=alt.X("Percentage:Q", axis=alt.Axis(format=".0%", title=None)),
+                            y=alt.Y("Sentiment:N", title=None, sort=["Positive", "Neutral", "Negative"]),
+                            color=alt.Color("Sentiment:N", scale=alt.Scale(
+                                domain=["Positive", "Neutral", "Negative"],
+                                range=["#10b981", "#9ca3af", "#ef4444"]
+                            ), legend=None),
+                            tooltip=[alt.Tooltip("Sentiment:N"), alt.Tooltip("Percentage:Q", format=".1%")]
+                        ).properties(height=180)
+                        
+                        # Add labels on bars
+                        sent_text = sent_chart.mark_text(align="left", baseline="middle", dx=5, fontWeight=600).encode(
+                            text=alt.Text("Percentage:Q", format=".0%")
+                        )
+                        st.altair_chart(sent_chart + sent_text, use_container_width=True)
+                
+                with a_col2:
+                    if aspect_dist:
+                        st.markdown("**Service Drivers (Share of Voice)**")
+                        dist_df = pd.DataFrame(aspect_dist)
+                        dist_df["Legend Label"] = dist_df.apply(lambda x: f"{x['Topic']} ({x['Share (%)']:.0%})", axis=1)
+                        
+                        arc_chart = alt.Chart(dist_df).mark_arc(innerRadius=45).encode(
+                            theta=alt.Theta("Share (%):Q", stack=True),
+                            color=alt.Color(
+                                "Legend Label:N",
+                                sort=alt.SortField("Share (%)", order="descending"),
+                                legend=alt.Legend(title=None, orient="right", labelLimit=0, symbolLimit=0)
+                            ),
+                            tooltip=[alt.Tooltip("Topic:N"), alt.Tooltip("Share (%) :Q", format=".1%")]
+                        ).properties(height=180)
+                        st.altair_chart(arc_chart, use_container_width=True)
+                
+                st.write("")
+                
+                # --- 3. EVIDENCE LAYER (DEEP DIVE) ---
+                st.divider()
+                with st.expander("🔍 Evidence Deep-Dive: Annotated Context", expanded=True):
+                    # Added max-height and overflow-y: auto to handle 10,000+ word reviews without breaking UI
+                    st.markdown(
+                        f"""
+                        <div style='background-color: #ffffff; color: #1f2937; border: 1px solid #e5e7eb; 
+                                    padding: 1.5rem; border-radius: 0.5rem; font-size: 1.1rem; line-height: 1.8; 
+                                    font-family: ui-sans-serif, system-ui, sans-serif; 
+                                    max-height: 400px; overflow-y: auto;'>
+                            {annotated_text}
+                        </div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
+                    st.caption("AI-identified segments are highlighted: 🟢 Positive, 🔴 Negative, ⚪ Neutral. Use the scrollbar for long reviews.")
+            
+            elif st.session_state.get("review_analyzed"):
+                st.warning("Please enter some text to begin analysis.")
+
+with tab_ml_feature:
+    st.caption("Understand which words drive 1-star vs 5-star ratings (Insights based on 'Strict Mode' LR Pipeline)")
+    
+    if not models:
+        st.error("ML models not found. Please run `train_model.py` first.")
+    else:
+        # Use the LR model pipeline
+        lr_pipe = models.get("Logistic Regression")
+        if lr_pipe:
+            # Extract internal components from the Pipeline
+            vectorizer = lr_pipe.named_steps['prep'].named_transformers_['tfidf']
+            lr_clf = lr_pipe.named_steps['clf']
+            
+            # The total features include the 10,000 TF-IDF features PLUS the 1 sentiment feature
+            feature_names = list(vectorizer.get_feature_names_out()) + ["Sentiment Score"]
+            
+            # UI-Side Exclusion Filter for generic/unhelpful terms
+            EXCLUDE_WORDS = {
+                "great", "good", "excellent", "amazing", "awesome", "fantastic", "perfect", 
+                "bad", "terrible", "awful", "horrible", "worst", "poor",
+                "flight", "flights", "singapore", "airlines", "airline", "ticket", "tickets", "sq", 
+                "time", "just", "really", "did", "got", "like", "best", "airport", "changi", "experience", "overall"
+            }
+            
+            def get_top_filtered_features(coefs, n=15):
+                # Sort highest positive coefficients first
+                sorted_idx = np.argsort(coefs)[::-1]
+                top_words = []
+                top_vals = []
+                for idx in sorted_idx:
+                    word = feature_names[idx]
+                    if word not in EXCLUDE_WORDS:
+                        top_words.append(word)
+                        top_vals.append(coefs[idx])
+                    if len(top_words) == n:
+                        break
+                # Reverse lists so Altair plots highest value at the top
+                return top_words[::-1], top_vals[::-1]
+            
+            st.subheader("Top Drivers for 1-Star (Negative)")
+            top_1star_words, top_1star_vals = get_top_filtered_features(lr_clf.coef_[0])
+            
+            df_1star = pd.DataFrame({"Word": top_1star_words, "Importance": top_1star_vals})
+            chart_1star = alt.Chart(df_1star).mark_bar(color="#d62728").encode(
+                x="Importance:Q",
+                y=alt.Y("Word:N", sort="-x")
+            ).properties(height=350)
+            st.altair_chart(chart_1star, use_container_width=True)
+            
+            st.subheader("Top Drivers for 5-Star (Positive)")
+            top_5star_words, top_5star_vals = get_top_filtered_features(lr_clf.coef_[4])
+            
+            df_5star = pd.DataFrame({"Word": top_5star_words, "Importance": top_5star_vals})
+            chart_5star = alt.Chart(df_5star).mark_bar(color="#2ca02c").encode(
+                x="Importance:Q",
+                y=alt.Y("Word:N", sort="-x")
+            ).properties(height=350)
+            st.altair_chart(chart_5star, use_container_width=True)
+        else:
+            st.warning("Logistic Regression pipeline not loaded for feature analysis.")
+            
+with tab_ml_mismatch:
+    st.caption("Surface 'Hidden Dissatisfaction' instances where star rating and text sentiment are severely mismatched.")
+    
+    st.info("We compute a VADER Sentiment compound score (-1 to 1) for each review and flag those clashing with their numerical rating.")
+    
+    analyzer = get_vader_analyzer()
+    
+    # Take a sample to avoid freezing the UI on 10k items
+    sample_df = filtered.dropna(subset=['text', 'rating']).copy()
+    if len(sample_df) > 1000:
+        sample_df = sample_df.sample(1000, random_state=42)
+        
+    def get_vader_score(text):
+        return analyzer.polarity_scores(text)['compound']
+        
+    sample_df['VADER_Score'] = sample_df['text'].apply(get_vader_score)
+    
+    # Define mismatches
+    # Fake Negative: Rating 1-2, but VADER > +0.5
+    fake_negative = sample_df[(sample_df['rating'] <= 2) & (sample_df['VADER_Score'] > 0.5)]
+    # Fake Positive: Rating 4-5, but VADER < -0.5
+    fake_positive = sample_df[(sample_df['rating'] >= 4) & (sample_df['VADER_Score'] < -0.5)]
+    
+    st.subheader(f"Fake Positives ({len(fake_positive)} in sample)")
+    st.caption("High rating (4-5), but negative sentiment in text.")
+    st.dataframe(fake_positive[['rating', 'VADER_Score', 'text']], use_container_width=True, hide_index=True)
+
+    st.subheader(f"Fake Negatives ({len(fake_negative)} in sample)")
+    st.caption("Low rating (1-2), but highly positive sentiment in text.")
+    st.dataframe(fake_negative[['rating', 'VADER_Score', 'text']], use_container_width=True, hide_index=True)
 

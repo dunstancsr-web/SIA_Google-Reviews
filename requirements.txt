@@ -3,3 +3,6 @@ pandas
 streamlit>=1.31.0
 wordcloud
 groq
+scikit-learn
+xgboost
+nltk
