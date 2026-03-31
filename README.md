@@ -11,7 +11,8 @@ pinned: false
 > Do not delete it or the app won't boot.
 
 
-
+# To open file in local host, type the following in the terminal:
+python -m streamlit run dashboardv2.py
 
 # Singapore Airlines Review Dashboard
 
@@ -38,10 +39,6 @@ An interactive Streamlit dashboard for analyzing Singapore Airlines customer rev
    cd ~/Documents/GitHub/SIA_Google-Reviews
    ```
 
-2. **Activate virtual environment**:
-   ```bash
-   source .venv/bin/activate
-   ```
 
 3. **Set Groq API Key** (for cloud AI insights):
    ```bash
@@ -190,3 +187,8 @@ For issues, check the code comments or consult:
 - Streamlit docs: https://docs.streamlit.io
 - Groq API docs: https://console.groq.com/docs
 - Ollama docs: https://ollama.ai
+
+
+
+# To open file in local host, type the following in the terminal:
+python -m streamlit run dashboardv2.py
