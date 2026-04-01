@@ -10,6 +10,7 @@ from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import numpy as np
 import html
 import json
+import ast
 import textwrap
 
 os.makedirs('./nltk_data', exist_ok=True)
@@ -275,13 +276,59 @@ st.markdown(
             background-color: #e5e7eb;
             border-radius: 6px;
             width: 100%;
-            overflow: hidden;
+            overflow: visible;
             position: relative;
             margin-top: 0.5rem;
         }
         .consensus-fill {
             height: 100%;
             transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 6px;
+        }
+        
+        /* Tick markers for Model Votes */
+        .tick-marker {
+            position: absolute;
+            top: -8px;
+            width: 12px;
+            height: 28px;
+            background: rgba(255, 255, 255, 0.8);
+            z-index: 20;
+            cursor: help;
+            pointer-events: auto;
+            border: 1px solid rgba(200, 200, 200, 0.6);
+            border-radius: 3px;
+            margin-left: -6px;
+            transition: all 0.2s ease;
+        }
+        .tick-marker:hover {
+            background: rgba(255, 255, 255, 1);
+            height: 32px;
+            top: -10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            border-color: rgba(100, 100, 100, 0.8);
+        }
+        .tick-marker::after {
+            content: attr(data-label);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+            pointer-events: none;
+            margin-bottom: 8px;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 30;
+        }
+        .tick-marker:hover::after {
+            opacity: 1;
         }
         
         /* Actionable Chips */
@@ -925,8 +972,8 @@ time_series = (
     .reset_index()
 )
 
-tab_overview, tab_explore, tab_export, tab_ml_predict, tab_ml_feature, tab_ml_mismatch = st.tabs(
-    ["Overview", "Data Exploration", "Data & Export", "ML: Predict Rating", "ML: Feature Importance", "ML: Hidden Dissatisfaction"]
+tab_ml_predict, tab_overview, tab_explore, tab_export = st.tabs(
+    ["ML: Predict Rating", "Overview", "Data Exploration", "Data & Export"]
 )
 
 with tab_export:
@@ -1409,7 +1456,7 @@ with tab_explore:
 models = load_ml_models()
 
 with tab_ml_predict:
-    st.caption("Predict rating using 'Strict Mode' Multi-Feature Pipelines (Balanced Data + Lexical Sentiment)")
+    st.caption("Analyze a customer review to estimate star rating and identify the right team for follow-up.")
     
     if not models:
         st.error("ML models not found. Please run `train_model.py` first.")
@@ -1498,6 +1545,10 @@ with tab_ml_predict:
                             
                         if not llm_out.strip():
                             raise Exception("LLM returned an entirely blank string.")
+                        
+                        # Strip markdown code blocks if present
+                        llm_out = re.sub(r'```(?:json)?\s*', '', llm_out)
+                        llm_out = re.sub(r'\s*```', '', llm_out)
                             
                         # Robust JSON array extraction
                         start_idx = llm_out.find('[')
@@ -1507,14 +1558,43 @@ with tab_ml_predict:
                             raise Exception(f"Failed to find JSON boundaries in LLM response: {llm_out[:100]}...")
                             
                         clean_json = llm_out[start_idx:end_idx+1]
-                        
-                        try:
-                            annotations = json.loads(clean_json)
-                        except json.JSONDecodeError:
-                            # Targeted Repair: Fix single quoted keys and values like 'topics': ['Food']
-                            repaired = re.sub(r"\'(\w+)\'(\s*:)", r'"\1"\2', clean_json) # Keys
-                            repaired = re.sub(r":\s*\'(.*?)\'", r': "\1"', repaired) # Values
-                            annotations = json.loads(repaired)
+
+                        def _normalize_json_text(raw_text):
+                            txt = raw_text.strip()
+                            txt = txt.replace("\u201c", '"').replace("\u201d", '"')
+                            txt = txt.replace("\u2018", "'").replace("\u2019", "'")
+                            # Remove trailing commas before object/array close.
+                            txt = re.sub(r",\s*([}\]])", r"\1", txt)
+                            # Quote common bare keys if present.
+                            txt = re.sub(r'([{,]\s*)(id|topics|sentiment)(\s*:)', r'\1"\2"\3', txt)
+                            # Remove any leading/trailing control characters
+                            txt = ''.join(c for c in txt if ord(c) >= 32 or c in '\n\t')
+                            return txt
+
+                        annotations = None
+                        parse_attempts = [
+                            clean_json,
+                            _normalize_json_text(clean_json),
+                        ]
+
+                        for attempt in parse_attempts:
+                            try:
+                                annotations = json.loads(attempt)
+                                break
+                            except json.JSONDecodeError:
+                                pass
+
+                        if annotations is None:
+                            # Try Python-literal parsing for single-quoted payloads.
+                            try:
+                                literal_obj = ast.literal_eval(_normalize_json_text(clean_json))
+                                if isinstance(literal_obj, list):
+                                    annotations = literal_obj
+                            except Exception:
+                                annotations = None
+
+                        if annotations is None:
+                            raise ValueError("Malformed JSON payload from LLM")
                         
                         for ann in annotations:
                             sent_str = ann.get("sentiment", "Neutral")
@@ -1526,7 +1606,7 @@ with tab_ml_predict:
                             analysis_meta["llm_used"] = True
                             analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
                     except Exception as e:
-                        st.toast(f"LLM Parsing Error: {e} | Reverting to VADER lexicon", icon="⚠️")
+                        st.toast("LLM output format issue detected. Using standard local routing.", icon="⚠️")
                         analysis_meta["engine_label"] = "Standard ML + VADER"
                         analysis_meta["engine_tier"] = "Local"
                         analysis_meta["status"] = "Fallback activated: local routing engine"
@@ -1667,34 +1747,123 @@ with tab_ml_predict:
         aspect_engine = model_bundle.get("aspect")
 
         with st.container():
-            st.caption("Paste a customer review below to predict the star rating and route the feedback to the correct department.")
-            review_input = st.text_area("Customer Review Text", value="", height=140, placeholder="e.g., The food was excellent but the flight was delayed by 3 hours...")
-            
-            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1.5])
-            with col_btn1:
-                if st.button("Analyze Review", type="secondary", use_container_width=True):
-                    st.session_state["review_analyzed"] = True
-            
-            with col_btn2:
-                # Tournament Selection
+            if "review_input_text" not in st.session_state:
+                st.session_state["review_input_text"] = ""
+
+            def _apply_sample_review(text: str):
+                st.session_state["review_input_text"] = text
+                st.session_state["review_analyzed"] = False
+
+            review_input = st.text_area(
+                "Customer Review Text",
+                height=140,
+                key="review_input_text",
+                placeholder="Paste or type one review, then click Analyze Review. e.g., The food was excellent but the flight was delayed by 3 hours...",
+            )
+
+            st.markdown("**Try sample reviews**")
+            st.caption("Use a preset to quickly stress test negative, mixed, and positive scenarios.")
+
+            sample_reviews = {
+                "1_star": (
+                    "My recent return flights Singapore to Rome on Singapore Airlines were the worst airline experience I've had in my 50 years of international travel and I paid a premium for it. "
+                    "I booked my flights thinking I would treat myself to a quality experience and also paid over SGD50 to reserve my preferred seats. "
+                    "A longwinded online check in which didn't allow me to select carry on only. "
+                    "I needed the airport check in counter to sort that out. "
+                    "Then I noticed I'm not in my reserved seat, instead I have been seated in one of the worst seats in the plane, opposite the toilets. "
+                    "The flight was late, service was chaotic and I was constantly disturbed by the toilet use. "
+                    "I contacted customer service after the flight. "
+                    "'Operational/technical reasons' were the excuse for my seat change (no change of plane type); no they wouldn't refund the seat reservation fee (they are reviewing but no word for 5 weeks). "
+                    "Also the reserved seat on my return flight was also unavailable (to me) and no, no refund, they would try to find a similar seat. "
+                    "I was passed around a series of CSRs, all of whom were brusque, intransigent and unhelpful. "
+                    "For my return flight, online check in would not let me register my Kris Flyer account because someone at SA had altered my name details. "
+                    "This took over an hour to sort out. "
+                    "In the end I missed the flight because I mistook 12pm for midnight. "
+                    "I contacted SA and was offered a seat on the next flight for SGD1400 'as a courtesy'. "
+                    "Even upset I said no to that. "
+                    "I booked with Gulf Air for SGD700, but I noticed in my searches the flight the CSR had offered, available online for SGD1000. "
+                    "The worst customer service and flight experience I have ever had from an airline that markets itself as offering a premium experience. "
+                    "By all means use SA if it's the cheapest deal, you'll get the same experience as anywhere else. "
+                    "I wouldn't pay a premium to fly with them because you won't get anything for your money. "
+                    "The airline knows how to market itself and maybe at one time, its service was above standard, but no longer. "
+                    "Reviews reveal that quality has tumbled post Covid. "
+                    "Clearly the bean counters have taken over as the airline tries to recoup its losses. "
+                    "In my recent experience, SA has been the rudest, most unhelpful and grudging airline I have ever dealt with and I will be avoiding them in future."
+                ),
+                "2_5_star": (
+                    "Overall disappointing from Singapore Airlines. Late and disorganized boarding. The A350-900 is a tired old thing. "
+                    "Does anyone seriously use the coat hanger button on the seat back in front of you? This aircraft has no air outlets above seats and made the trip stuffy. "
+                    "The entertainment system was very old and dated movies, yes even the so called \"recent releases\". TV selections were abysmal. "
+                    "This was the first international flight I watched nothing at all on. Food was below par and drinks service patchy. "
+                    "I used to think Singapore Airlines was a great airline but after this flight I beg to differ. One good point is the staff on board professional and friendly."
+                ),
+                "5_star": (
+                    "Excellent for economy. Five hours into flight and the seat was still comfortable - soft and firm in the right spots. "
+                    "The breakfast was good for economy. Large enough portions. Taste enough with variation on the tray to add interest. "
+                    "Cabin staff outstanding. Friendly and attentive. Quality tv screen. Easy to operate with a wide variety of programs. "
+                    "My transmitter that enables my wireless headphones to connect, doesn't always work on left and right. No problems on this flight. "
+                    "Power outlets for mains and USB. The best boarding process I have used, why don't all airlines do this? "
+                    "After showing boarding pass and entering the gate lounge, we were seated in boarding groups. "
+                    "Then each seated are group was called up in turn. Much more efficient than calling out the number of the boarding group and hoping every one has heard and no one tries to queue jump."
+                ),
+            }
+
+            preset_cols = st.columns([1, 1, 1])
+            with preset_cols[0]:
+                st.button(
+                    "1★ Severe service failure",
+                    use_container_width=True,
+                    on_click=_apply_sample_review,
+                    args=(sample_reviews["1_star"],),
+                )
+            with preset_cols[1]:
+                st.button(
+                    "2.5★ Mixed experience",
+                    use_container_width=True,
+                    on_click=_apply_sample_review,
+                    args=(sample_reviews["2_5_star"],),
+                )
+            with preset_cols[2]:
+                st.button(
+                    "5★ Excellent journey",
+                    use_container_width=True,
+                    on_click=_apply_sample_review,
+                    args=(sample_reviews["5_star"],),
+                )
+
+            st.markdown("**Analysis Settings**")
+            settings_col1, settings_col2 = st.columns([1.25, 1.25])
+
+            with settings_col1:
+                # Rating engine (advanced setting)
                 if rating_models:
-                    selected_model_name = st.selectbox(
-                        "Rating Engine", 
-                        options=list(rating_models.keys()), 
-                        index=0,
-                        help="Choose the model that drives the star rating prediction used in the main report."
-                    )
+                    engine_options = list(rating_models.keys())
+                    selected_model_name = st.session_state.get("selected_rating_engine", engine_options[0])
+                    if selected_model_name not in engine_options:
+                        selected_model_name = engine_options[0]
+
+                    st.caption(f"Current engine: {selected_model_name}")
+
                     model_profile = {
                         "Logistic Regression": "Balanced profile: strong general-purpose baseline.",
                         "Random Forest": "Detailed profile: captures nonlinear patterns.",
                         "Linear SVM": "Strict profile: sharper class boundaries.",
                     }
-                    selected_model_key = str(selected_model_name) if selected_model_name is not None else ""
-                    st.caption(model_profile.get(selected_model_key, "Model selected for rating prediction."))
+
+                    with st.expander("Advanced settings", expanded=False):
+                        selected_model_name = st.selectbox(
+                            "Rating Engine",
+                            options=engine_options,
+                            index=engine_options.index(selected_model_name),
+                            key="selected_rating_engine",
+                            help="Choose the model that drives the star rating prediction used in the main report.",
+                        )
+                        selected_model_key = str(selected_model_name) if selected_model_name is not None else ""
+                        st.caption(model_profile.get(selected_model_key, "Model selected for rating prediction."))
                 else:
                     selected_model_name = "None"
-                    
-            with col_btn3:
+
+            with settings_col2:
                 use_llm = st.toggle(
                     "AI-assisted routing",
                     value=True,
@@ -1718,6 +1887,9 @@ with tab_ml_predict:
                             st.caption("Status: Auto mode is using Groq cloud.")
                         else:
                             st.caption("Status: Auto mode is using Ollama/local fallback.")
+
+            if st.button("Analyze Review", type="secondary", use_container_width=True):
+                st.session_state["review_analyzed"] = True
             
             if st.session_state.get("review_analyzed") and review_input.strip() and rating_models:
                 input_clean = re.sub(r'[^a-z0-9\s]', '', review_input.lower()).strip()
@@ -1782,11 +1954,12 @@ with tab_ml_predict:
                 detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta = extract_aspect_tags(review_input, use_llm=use_llm)
                 
                 st.divider()
+                st.caption("Results are organized from summary to detail. Start with the verdict card, then open optional detail sections as needed.")
                 
                 # --- 0. MULTI-MODEL TOURNAMENT SUMMARY ---
-                st.markdown("### 🧬 AI Model Tournament (Consensus Engine)")
-                st.table(all_results)
-                st.caption(f"The **Consensus Score** (Optimized) blends all models based on their verified accuracy.")
+                with st.expander("🧬 Model consensus details (optional)", expanded=False):
+                    st.table(all_results)
+                    st.caption("Consensus blends model outputs using benchmark-weighted accuracy.")
                 st.write("")
                 
                 # --- 1. THE PREMIUM VERDICT HERO (UI/UX) ---
@@ -1813,8 +1986,8 @@ with tab_ml_predict:
                     # Calculate individual model score
                     m_score = sum((i+1) * m.predict_proba(X_input)[0][i] for i in range(5))
                     tick_pos = round(((m_score - 1) / 4) * 100, 1)
-                    # Add a vertical marker with a hover tooltip identifying the model
-                    ticks_html += f'<div title="{name}: {m_score:.2f} Stars" style="position: absolute; left: {tick_pos}%; top: 0; width: 2px; height: 100%; background: rgba(255,255,255,0.7); z-index: 10; cursor: help;"></div>'
+                    # Add a vertical marker with a hover tooltip identifying the model using data attribute
+                    ticks_html += f'<div class="tick-marker" data-label="{name}: {m_score:.2f} ★" style="left: {tick_pos}%;"></div>'
                 
                 # Pre-construct the Hero HTML to prevent F-string markdown confusion and collapse it to avoid parsing leaks
                 sentiment_order = {"🟢": 0, "🔴": 1, "⚪": 2}
@@ -1829,15 +2002,12 @@ with tab_ml_predict:
                 <div class="verdict-hero" style="background-color: {h_bg}; border-left-color: {h_border};">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                         <div>
-                            <div class="verdict-hero-title">Unified Consensus Analytics</div>
+                            <div class="verdict-hero-title">AI Model Agreement Score</div>
                             <div style="display: flex; align-items: baseline;">
                                 <span class="verdict-score-big" style="color: {h_text};">{consensus_score:.2f}</span>
                                 <span style="font-size: 1.5rem; font-weight: 700; color: {h_text}; opacity: 0.7; margin-right: 1.5rem;">/ 5</span>
                                 <div style="display: flex; flex-direction: column;">
                                     <div style="font-size: 1.5rem; color: {h_text};">{stars_display}</div>
-                                    <div style="font-size: 0.85rem; font-weight: 600; color: {ag_color}; background: rgba(255,255,255,0.7); padding: 2px 8px; border-radius: 4px; margin-top: 4px;">
-                                        ● {consensus_agreement} Agreement
-                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1848,8 +2018,7 @@ with tab_ml_predict:
                     </div>
                     <div class="consensus-container">
                         <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 700; color: #4b5563;">
-                            <span>TOURNAMENT SPREAD (CONSENSUS)</span>
-                            <span>{consensus_score:.2f} / 5.0</span>
+                            <span>HOW EACH MODEL VOTED</span>
                         </div>
                         <div class="consensus-track">
                             <div class="consensus-fill" style="width: {meter_pct}%; background-color: {h_border};"></div>
@@ -1860,13 +2029,14 @@ with tab_ml_predict:
                         </div>
                     </div>
                 </div>
-                <div style="margin-top: 1rem;">
-                    <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 0.5rem; color: #374151;">ACTIONABLE ROUTING TAGS:</div>
-                    <div>{tags_html}</div>
-                </div>
                 """
                 # The 'Nuclear' Fix: Remove all newlines and indentation to force the browser to treat it as one continuous HTML block
                 verdict_html = "".join([line.strip() for line in raw_html.split("\n")])
+                
+                st.subheader(
+                    "🎯 AI Model Agreement Score",
+                    help="**AI Model Agreement Score:** The average sentiment rating predicted across all AI models (1-5 stars). A consensus score that blends multiple machine learning engines. **How Each Model Voted:** Individual predictions from each AI model shown as white markers on the progress bar. Hover over the markers to see each model's exact score. This helps you understand model confidence—if all markers align (high agreement), the prediction is more reliable."
+                )
                 st.markdown(verdict_html, unsafe_allow_html=True)
                 
                 if consensus_agreement == "Low (Ambiguous)":
@@ -1875,7 +2045,10 @@ with tab_ml_predict:
                 st.write("")
                 
                 # --- 2. ANALYTICAL BREAKDOWN (THE 'WHY') ---
-                st.markdown("### 📊 Analytical Breakdown")
+                st.subheader(
+                    "📊 Analytical Breakdown",
+                    help="Use this section for deeper context on sentiment and service-driver distribution.",
+                )
                 engine_colors = {
                     "Cloud": "#dbeafe",
                     "Local LLM": "#dcfce7",
@@ -1899,7 +2072,10 @@ with tab_ml_predict:
                 
                 with a_col1:
                     if sent_dist:
-                        st.markdown("**Review Sentiment (Mood)**")
+                        st.subheader(
+                            "Review Sentiment (Mood)",
+                            help="Shows whether the customer's review is overall positive, negative, or neutral. The chart breaks down what percentage of their comments fall into each category.",
+                        )
                         sent_df = pd.DataFrame(sent_dist)
                         sentiment_labels = {
                             "Positive": "Positive feedback",
@@ -1958,7 +2134,10 @@ with tab_ml_predict:
                 
                 with a_col2:
                     if aspect_dist:
-                        st.markdown("**Service Drivers (Share of Voice)**")
+                        st.subheader(
+                            "Service Drivers (Share of Voice)",
+                            help="Shows which service topics (like food, seats, staff, or delays) the customer mentions most. Topics mentioned more often are typically more important to them.",
+                        )
                         dist_df = pd.DataFrame(aspect_dist)
                         dist_df = dist_df.sort_values("Share (%)", ascending=False)
                         topic_order = dist_df["Topic"].tolist()
@@ -2004,6 +2183,12 @@ with tab_ml_predict:
                         st.caption(
                             f"Takeaway: {top_driver['Topic']} is the top service driver at {top_driver['Share (%)']:.0%} ({int(top_driver['Count'])})."
                         )
+
+                st.subheader(
+                    "🎯 Actionable Routing Tags",
+                    help="Recommended follow-up routing based on the detected issues and sentiment.",
+                )
+                st.markdown(f"<div style='margin-top: 0.2rem;'>{tags_html}</div>", unsafe_allow_html=True)
                 
                 st.write("")
                 
@@ -2044,96 +2229,4 @@ with tab_ml_predict:
             
             elif st.session_state.get("review_analyzed"):
                 st.warning("Please enter some text to begin analysis.")
-
-with tab_ml_feature:
-    st.caption("Understand which words drive 1-star vs 5-star ratings (Insights based on 'Strict Mode' LR Pipeline)")
-    
-    if not models:
-        st.error("ML models not found. Please run `train_model.py` first.")
-    else:
-        # Use the LR model pipeline
-        lr_pipe = models.get("Logistic Regression")
-        if lr_pipe:
-            # Extract internal components from the Pipeline
-            vectorizer = lr_pipe.named_steps['prep'].named_transformers_['tfidf']
-            lr_clf = lr_pipe.named_steps['clf']
-            
-            # The total features include the 10,000 TF-IDF features PLUS the 1 sentiment feature
-            feature_names = list(vectorizer.get_feature_names_out()) + ["Sentiment Score"]
-            
-            # UI-Side Exclusion Filter for generic/unhelpful terms
-            EXCLUDE_WORDS = {
-                "great", "good", "excellent", "amazing", "awesome", "fantastic", "perfect", 
-                "bad", "terrible", "awful", "horrible", "worst", "poor",
-                "flight", "flights", "singapore", "airlines", "airline", "ticket", "tickets", "sq", 
-                "time", "just", "really", "did", "got", "like", "best", "airport", "changi", "experience", "overall"
-            }
-            
-            def get_top_filtered_features(coefs, n=15):
-                # Sort highest positive coefficients first
-                sorted_idx = np.argsort(coefs)[::-1]
-                top_words = []
-                top_vals = []
-                for idx in sorted_idx:
-                    word = feature_names[idx]
-                    if word not in EXCLUDE_WORDS:
-                        top_words.append(word)
-                        top_vals.append(coefs[idx])
-                    if len(top_words) == n:
-                        break
-                # Reverse lists so Altair plots highest value at the top
-                return top_words[::-1], top_vals[::-1]
-            
-            st.subheader("Top Drivers for 1-Star (Negative)")
-            top_1star_words, top_1star_vals = get_top_filtered_features(lr_clf.coef_[0])
-            
-            df_1star = pd.DataFrame({"Word": top_1star_words, "Importance": top_1star_vals})
-            chart_1star = alt.Chart(df_1star).mark_bar(color="#d62728").encode(
-                x="Importance:Q",
-                y=alt.Y("Word:N", sort="-x")
-            ).properties(height=350)
-            st.altair_chart(chart_1star, use_container_width=True)
-            
-            st.subheader("Top Drivers for 5-Star (Positive)")
-            top_5star_words, top_5star_vals = get_top_filtered_features(lr_clf.coef_[4])
-            
-            df_5star = pd.DataFrame({"Word": top_5star_words, "Importance": top_5star_vals})
-            chart_5star = alt.Chart(df_5star).mark_bar(color="#2ca02c").encode(
-                x="Importance:Q",
-                y=alt.Y("Word:N", sort="-x")
-            ).properties(height=350)
-            st.altair_chart(chart_5star, use_container_width=True)
-        else:
-            st.warning("Logistic Regression pipeline not loaded for feature analysis.")
-            
-with tab_ml_mismatch:
-    st.caption("Surface 'Hidden Dissatisfaction' instances where star rating and text sentiment are severely mismatched.")
-    
-    st.info("We compute a VADER Sentiment compound score (-1 to 1) for each review and flag those clashing with their numerical rating.")
-    
-    analyzer = get_vader_analyzer()
-    
-    # Take a sample to avoid freezing the UI on 10k items
-    sample_df = filtered.dropna(subset=['text', 'rating']).copy()
-    if len(sample_df) > 1000:
-        sample_df = sample_df.sample(1000, random_state=42)
-        
-    def get_vader_score(text):
-        return analyzer.polarity_scores(text)['compound']
-        
-    sample_df['VADER_Score'] = sample_df['text'].apply(get_vader_score)
-    
-    # Define mismatches
-    # Fake Negative: Rating 1-2, but VADER > +0.5
-    fake_negative = sample_df[(sample_df['rating'] <= 2) & (sample_df['VADER_Score'] > 0.5)]
-    # Fake Positive: Rating 4-5, but VADER < -0.5
-    fake_positive = sample_df[(sample_df['rating'] >= 4) & (sample_df['VADER_Score'] < -0.5)]
-    
-    st.subheader(f"Fake Positives ({len(fake_positive)} in sample)")
-    st.caption("High rating (4-5), but negative sentiment in text.")
-    st.dataframe(fake_positive[['rating', 'VADER_Score', 'text']], use_container_width=True, hide_index=True)
-
-    st.subheader(f"Fake Negatives ({len(fake_negative)} in sample)")
-    st.caption("Low rating (1-2), but highly positive sentiment in text.")
-    st.dataframe(fake_negative[['rating', 'VADER_Score', 'text']], use_container_width=True, hide_index=True)
 
