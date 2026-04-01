@@ -21,7 +21,17 @@ jobs:
       - name: Validate configured URL(s)
         run: |
           if [ -z "${TARGET_URLS}" ]; then
-            echo "No URL configured. Set repo variable STREAMLIT_APP_URLS (or secret with same name)."
+            echo "No URL configured for keep-alive."
+            echo ""
+            echo "Fix option 1 (recommended):"
+            echo "  Repo Settings -> Secrets and variables -> Actions -> Variables"
+            echo "  Create variable: STREAMLIT_APP_URLS"
+            echo "  Example value: https://your-app-name.streamlit.app"
+            echo "  Multiple URLs: https://app1.streamlit.app,https://app2.streamlit.app"
+            echo ""
+            echo "Fix option 2 (one-off test):"
+            echo "  Actions -> Run workflow -> set url_override input"
+            echo "  Example: https://your-app-name.streamlit.app"
             exit 1
           fi
           echo "Configured target(s): ${TARGET_URLS}"
