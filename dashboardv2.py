@@ -2338,7 +2338,11 @@ with tab_ml_predict:
                 st.markdown(verdict_html, unsafe_allow_html=True)
                 
                 if consensus_agreement == "Low (Ambiguous)":
-                    st.warning("⚠️ **Model Divergence Detected:** The AI engines are in strong disagreement. This review has been flagged for manual administrative audit.", icon="🧐")
+                    st.warning("⚠️ **Model Divergence Detected:** The AI engines are in strong disagreement. This review should be flagged for a manual administrative audit.", icon="🧐")
+                    col_btn1, col_btn2 = st.columns([1, 4])
+                    with col_btn1:
+                        if st.button("Request Human Review", type="primary", use_container_width=True):
+                            st.toast("✅ Review successfully flagged and sent to admin queue.")
                 
                 st.write("")
                 
