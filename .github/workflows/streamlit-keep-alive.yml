@@ -1,41 +1,15 @@
-name: Streamlit Dashboard Keep-Alive
+name: SIA Dashboard Keep-Alive
 
 on:
   schedule:
+    # This runs exactly every 6 hours (4x per day)
     - cron: '0 */6 * * *'
   workflow_dispatch:
-    inputs:
-      url_override:
-        description: Optional URL override for this run
-        required: false
-        type: string
 
 jobs:
-  keep-alive:
+  browser-visit:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      TARGET_URLS: ${{ github.event.inputs.url_override || vars.STREAMLIT_APP_URLS || secrets.STREAMLIT_APP_URLS }}
-
     steps:
-      - name: Validate configured URL(s)
-        run: |
-          if [ -z "${TARGET_URLS}" ]; then
-            echo "No URL configured for keep-alive."
-            echo ""
-            echo "Fix option 1 (recommended):"
-            echo "  Repo Settings -> Secrets and variables -> Actions -> Variables"
-            echo "  Create variable: STREAMLIT_APP_URLS"
-            echo "  Example value: https://your-app-name.streamlit.app"
-            echo "  Multiple URLs: https://app1.streamlit.app,https://app2.streamlit.app"
-            echo ""
-            echo "Fix option 2 (one-off test):"
-            echo "  Actions -> Run workflow -> set url_override input"
-            echo "  Example: https://your-app-name.streamlit.app"
-            exit 1
-          fi
-          echo "Configured target(s): ${TARGET_URLS}"
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -46,44 +20,31 @@ jobs:
           npm install playwright
           npx playwright install chromium --with-deps
 
-      - name: Visit Streamlit app(s)
+      - name: Visit Page and Wake Dashboard
         run: |
           node -e "
           const { chromium } = require('playwright');
-          const urls = (process.env.TARGET_URLS || '').split(',').map(u => u.trim()).filter(Boolean);
-          const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-          async function visitWithRetry(browser, url, maxAttempts = 3) {
-            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-              const page = await browser.newPage();
-              try {
-                console.log('[' + attempt + '/' + maxAttempts + '] Visiting: ' + url);
-                await page.goto(url, { waitUntil: 'load', timeout: 90000 });
-                await sleep(20000);
-                console.log('Success: ' + url + ' | title=' + await page.title());
-                await page.close();
-                return;
-              } catch (err) {
-                console.error('Attempt failed for ' + url + ': ' + err.message);
-                await page.close();
-                if (attempt === maxAttempts) throw err;
-                await sleep(5000);
-              }
-            }
-          }
-
           (async () => {
-            const browser = await chromium.launch({ headless: true });
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            console.log('Navigating to wake page...');
+
             try {
-              for (const url of urls) {
-                await visitWithRetry(browser, url, 3);
-              }
-              console.log('All keep-alive visits completed successfully.');
+              // Replace this URL with your deployed Streamlit app URL if needed.
+              // Example: https://your-app-name.streamlit.app
+              await page.goto('https://dunstancsr-web.github.io/DunstanPortfolio/portfolio-reels.html', {
+                waitUntil: 'load',
+                timeout: 90000
+              });
+
+              console.log('Page loaded. Waiting 30s for dashboard wake-up...');
+              await new Promise(r => setTimeout(r, 30000));
+
+              console.log('Success: Keep-alive visit completed.');
+            } catch (error) {
+              console.error('Navigation note:', error.message);
             } finally {
               await browser.close();
             }
-          })().catch(err => {
-            console.error('Keep-alive workflow failed:', err.message);
-            process.exit(1);
-          });
+          })();
           "
