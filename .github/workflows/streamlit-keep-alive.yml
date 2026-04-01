@@ -1,0 +1,79 @@
+name: Streamlit Dashboard Keep-Alive
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      url_override:
+        description: Optional URL override for this run
+        required: false
+        type: string
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_URLS: ${{ github.event.inputs.url_override || vars.STREAMLIT_APP_URLS || secrets.STREAMLIT_APP_URLS }}
+
+    steps:
+      - name: Validate configured URL(s)
+        run: |
+          if [ -z "${TARGET_URLS}" ]; then
+            echo "No URL configured. Set repo variable STREAMLIT_APP_URLS (or secret with same name)."
+            exit 1
+          fi
+          echo "Configured target(s): ${TARGET_URLS}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        run: |
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Visit Streamlit app(s)
+        run: |
+          node -e "
+          const { chromium } = require('playwright');
+          const urls = (process.env.TARGET_URLS || '').split(',').map(u => u.trim()).filter(Boolean);
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+          async function visitWithRetry(browser, url, maxAttempts = 3) {
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              const page = await browser.newPage();
+              try {
+                console.log('[' + attempt + '/' + maxAttempts + '] Visiting: ' + url);
+                await page.goto(url, { waitUntil: 'load', timeout: 90000 });
+                await sleep(20000);
+                console.log('Success: ' + url + ' | title=' + await page.title());
+                await page.close();
+                return;
+              } catch (err) {
+                console.error('Attempt failed for ' + url + ': ' + err.message);
+                await page.close();
+                if (attempt === maxAttempts) throw err;
+                await sleep(5000);
+              }
+            }
+          }
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            try {
+              for (const url of urls) {
+                await visitWithRetry(browser, url, 3);
+              }
+              console.log('All keep-alive visits completed successfully.');
+            } finally {
+              await browser.close();
+            }
+          })().catch(err => {
+            console.error('Keep-alive workflow failed:', err.message);
+            process.exit(1);
+          });
+          "
