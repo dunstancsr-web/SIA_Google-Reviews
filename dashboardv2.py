@@ -87,10 +87,22 @@ st.markdown(
         [data-testid="stButton"] button {
             transition: background-color 0.2s ease, color 0.2s ease;
         }
+        [data-testid="stButton"] button[kind="primary"] {
+            background-color: transparent !important;
+            color: #111827 !important;
+            border: 1px solid #9ca3af !important;
+        }
         [data-testid="stButton"] button:hover {
             background-color: #30d158 !important;
             color: #ffffff !important;
             border-color: #30d158 !important;
+        }
+        [data-baseweb="switch"] input:checked + div {
+            background-color: #16a34a !important;
+            border-color: #16a34a !important;
+        }
+        [data-baseweb="switch"] input:checked + div > div {
+            background-color: #ffffff !important;
         }
         .guide-hover-wrap {
             position: relative;
@@ -1417,6 +1429,13 @@ with tab_ml_predict:
             analyzer = get_vader_analyzer()
             # Split text keeping delimiters to reconstruct original text
             segments = re.split(r'([.!?\n]+)', text)
+            analysis_meta = {
+                "engine_label": "Standard ML + VADER",
+                "engine_tier": "Local",
+                "status": "Using local routing engine",
+                "llm_attempted": False,
+                "llm_used": False,
+            }
             
             # --- CONTEXT-AWARE LLM UPGRADE ---
             llm_sentiments = {} # Dictionary mapping segment index -> (topics_list, sentiment_score)
@@ -1427,6 +1446,16 @@ with tab_ml_predict:
             use_ollama = (model_choice == "ollama") or (model_choice == "auto" and not api_key)
             
             if use_llm and (use_groq or use_ollama):
+                analysis_meta["llm_attempted"] = True
+                if use_groq:
+                    analysis_meta["engine_label"] = "Groq LLM"
+                    analysis_meta["engine_tier"] = "Cloud"
+                    analysis_meta["status"] = "Using Groq for context-aware routing"
+                elif use_ollama:
+                    analysis_meta["engine_label"] = "Ollama LLM"
+                    analysis_meta["engine_tier"] = "Local LLM"
+                    analysis_meta["status"] = "Using Ollama for context-aware routing"
+
                 valid_sentences = []
                 for idx, seg in enumerate(segments):
                     if seg.strip() and not re.fullmatch(r'[.!?\n]+', seg):
@@ -1457,13 +1486,15 @@ with tab_ml_predict:
                                 messages=[{"role": "system", "content": "You are a JSON API. Output raw JSON array only, no markdown."}, {"role": "user", "content": prompt}],
                                 model="llama-3.1-8b-instant", temperature=0
                             )
-                            llm_out = resp.choices[0].message.content
+                            llm_out = resp.choices[0].message.content or ""
                         else:
                             import requests
                             res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output bare JSON array only.", "stream": False}, timeout=60)
                             if res.status_code != 200:
                                 raise Exception(f"Ollama returned {res.status_code}: {res.text}")
-                            llm_out = res.json().get("response", "")
+                            llm_out = res.json().get("response", "") or ""
+
+                        llm_out = str(llm_out)
                             
                         if not llm_out.strip():
                             raise Exception("LLM returned an entirely blank string.")
@@ -1491,14 +1522,22 @@ with tab_ml_predict:
                             if "positive" in sent_str.lower(): score = 0.5
                             elif "negative" in sent_str.lower(): score = -0.5
                             llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
+                        if llm_sentiments:
+                            analysis_meta["llm_used"] = True
+                            analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
                     except Exception as e:
                         st.toast(f"LLM Parsing Error: {e} | Reverting to VADER lexicon", icon="⚠️")
+                        analysis_meta["engine_label"] = "Standard ML + VADER"
+                        analysis_meta["engine_tier"] = "Local"
+                        analysis_meta["status"] = "Fallback activated: local routing engine"
                         pass # Fallback cleanly to VADER lexicons if LLM fails
             # ----------------------------------
             
             aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
-            aspect_lengths = {category: 0 for category in ASPECT_TAXONOMY}
+            aspect_lengths = {category: 0.0 for category in ASPECT_TAXONOMY}
+            aspect_mentions = {category: 0 for category in ASPECT_TAXONOMY}
             sentiment_lengths = {"Positive": 0, "Negative": 0, "Neutral": 0}
+            sentiment_counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
             general_length = 0
             
             highlighted_html = []
@@ -1551,9 +1590,15 @@ with tab_ml_predict:
                                 matched_cats.append(category)
                 
                 # Track sentiment distribution lengths
-                if sent_score > 0.1: sentiment_lengths["Positive"] += sent_len
-                elif sent_score < -0.1: sentiment_lengths["Negative"] += sent_len
-                else: sentiment_lengths["Neutral"] += sent_len
+                if sent_score > 0.1:
+                    sentiment_lengths["Positive"] += sent_len
+                    sentiment_counts["Positive"] += 1
+                elif sent_score < -0.1:
+                    sentiment_lengths["Negative"] += sent_len
+                    sentiment_counts["Negative"] += 1
+                else:
+                    sentiment_lengths["Neutral"] += sent_len
+                    sentiment_counts["Neutral"] += 1
                 
                 segment_safe = html.escape(segment)
                 
@@ -1563,6 +1608,7 @@ with tab_ml_predict:
                     for cat in matched_cats:
                         aspect_scores[cat].append(sent_score)
                         aspect_lengths[cat] += split_len
+                        aspect_mentions[cat] += 1
                         
                     # Build highlight HTML
                     tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px; white-space: nowrap;'>{c}</span>" for c in matched_cats])
@@ -1598,23 +1644,22 @@ with tab_ml_predict:
                     else:
                         final_tags.append(f"⚪ {category}")
                         
-                if aspect_lengths[category] > 0:
-                    share = aspect_lengths[category] / total_len if total_len else 0
-                    distribution.append({"Topic": category, "Share (%)": share})
+                if aspect_mentions[category] > 0:
+                    distribution.append({"Topic": category, "Count": aspect_mentions[category]})
                     
-            if general_length > 0:
-                share = general_length / total_len if total_len else 0
-                distribution.append({"Topic": "General Feedback", "Share (%)": share})
+            mention_total = sum(aspect_mentions.values())
+            for row in distribution:
+                row["Share (%)"] = (row["Count"] / mention_total) if mention_total else 0
             
             # Sentiment breakdown distribution
             sent_distribution = []
-            sentiment_total = sum(sentiment_lengths.values())
-            for sent_type, s_len in sentiment_lengths.items():
+            sentiment_total = sum(sentiment_counts.values())
+            for sent_type, s_count in sentiment_counts.items():
                 if sentiment_total > 0:
-                    sent_distribution.append({"Sentiment": sent_type, "Percentage": s_len / sentiment_total})
+                    sent_distribution.append({"Sentiment": sent_type, "Count": s_count, "Percentage": s_count / sentiment_total})
                 
             annotated_text = "".join(highlighted_html)
-            return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text
+            return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta
             
         # Global Model Handling for this Tab
         model_bundle = load_ml_models()
@@ -1622,28 +1667,57 @@ with tab_ml_predict:
         aspect_engine = model_bundle.get("aspect")
 
         with st.container():
-            st.caption("Paste a customer review below to predict the star rating and automatically route the feedback to the correct department.")
+            st.caption("Paste a customer review below to predict the star rating and route the feedback to the correct department.")
             review_input = st.text_area("Customer Review Text", value="", height=140, placeholder="e.g., The food was excellent but the flight was delayed by 3 hours...")
             
             col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1.5])
             with col_btn1:
-                if st.button("Analyze Review", type="primary", use_container_width=True):
+                if st.button("Analyze Review", type="secondary", use_container_width=True):
                     st.session_state["review_analyzed"] = True
             
             with col_btn2:
                 # Tournament Selection
                 if rating_models:
                     selected_model_name = st.selectbox(
-                        "Primary Engine", 
+                        "Rating Engine", 
                         options=list(rating_models.keys()), 
                         index=0,
-                        help="Choose which algorithm drives the main report. Logistic Regression is balanced, SVM is strict, RF is detailed."
+                        help="Choose the model that drives the star rating prediction used in the main report."
                     )
+                    model_profile = {
+                        "Logistic Regression": "Balanced profile: strong general-purpose baseline.",
+                        "Random Forest": "Detailed profile: captures nonlinear patterns.",
+                        "Linear SVM": "Strict profile: sharper class boundaries.",
+                    }
+                    selected_model_key = str(selected_model_name) if selected_model_name is not None else ""
+                    st.caption(model_profile.get(selected_model_key, "Model selected for rating prediction."))
                 else:
                     selected_model_name = "None"
                     
             with col_btn3:
-                use_llm = st.toggle("Enable Context-Aware AI Routing (Higher Accuracy)", value=True, help="Uses Groq/Ollama. If off, uses the local Autonomous ML Engine (Zero-Communication).")
+                use_llm = st.toggle(
+                    "AI-assisted routing",
+                    value=True,
+                    help="When enabled, uses Groq/Ollama for richer context. When disabled, uses local routing only.",
+                )
+                selected_ai_backend = st.session_state.get("selected_ai_model", "auto")
+                groq_api_ready = bool(os.environ.get("GROQ_API_KEY", ""))
+
+                if not use_llm:
+                    st.caption("Status: Local routing only (fastest, no external LLM calls).")
+                else:
+                    if selected_ai_backend == "groq":
+                        if groq_api_ready:
+                            st.caption("Status: AI-assisted routing active via Groq cloud.")
+                        else:
+                            st.warning("Groq is selected but GROQ_API_KEY is missing. Routing will fall back to local mode.")
+                    elif selected_ai_backend == "ollama":
+                        st.caption("Status: AI-assisted routing via Ollama local service.")
+                    else:
+                        if groq_api_ready:
+                            st.caption("Status: Auto mode is using Groq cloud.")
+                        else:
+                            st.caption("Status: Auto mode is using Ollama/local fallback.")
             
             if st.session_state.get("review_analyzed") and review_input.strip() and rating_models:
                 input_clean = re.sub(r'[^a-z0-9\s]', '', review_input.lower()).strip()
@@ -1705,7 +1779,7 @@ with tab_ml_predict:
                 probabilities = active_model.predict_proba(X_input)[0]
                 
                 # Aspect extraction
-                detected_tags, aspect_dist, sent_dist, annotated_text = extract_aspect_tags(review_input, use_llm=use_llm)
+                detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta = extract_aspect_tags(review_input, use_llm=use_llm)
                 
                 st.divider()
                 
@@ -1743,7 +1817,12 @@ with tab_ml_predict:
                     ticks_html += f'<div title="{name}: {m_score:.2f} Stars" style="position: absolute; left: {tick_pos}%; top: 0; width: 2px; height: 100%; background: rgba(255,255,255,0.7); z-index: 10; cursor: help;"></div>'
                 
                 # Pre-construct the Hero HTML to prevent F-string markdown confusion and collapse it to avoid parsing leaks
-                tags_html = "".join([f'<span class="sia-chip">{tag}</span>' for tag in detected_tags])
+                sentiment_order = {"🟢": 0, "🔴": 1, "⚪": 2}
+                sorted_tags = sorted(
+                    detected_tags,
+                    key=lambda tag: (sentiment_order.get(tag[:1], 3), tag[2:].strip().lower()),
+                )
+                tags_html = "".join([f'<span class="sia-chip">{tag}</span>' for tag in sorted_tags])
                 stars_display = "&#11088;" * int(prediction) # Use HTML entity for Star
                 
                 raw_html = f"""
@@ -1784,7 +1863,6 @@ with tab_ml_predict:
                 <div style="margin-top: 1rem;">
                     <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 0.5rem; color: #374151;">ACTIONABLE ROUTING TAGS:</div>
                     <div>{tags_html}</div>
-                    <div style="font-size: 0.8rem; color: #6b7280; margin-top: 0.5rem;">These tags are used to automatically forward this feedback to the relevant operations teams.</div>
                 </div>
                 """
                 # The 'Nuclear' Fix: Remove all newlines and indentation to force the browser to treat it as one continuous HTML block
@@ -1798,44 +1876,134 @@ with tab_ml_predict:
                 
                 # --- 2. ANALYTICAL BREAKDOWN (THE 'WHY') ---
                 st.markdown("### 📊 Analytical Breakdown")
+                engine_colors = {
+                    "Cloud": "#dbeafe",
+                    "Local LLM": "#dcfce7",
+                    "Local": "#f3f4f6",
+                }
+                engine_bg = engine_colors.get(analysis_meta.get("engine_tier"), "#f3f4f6")
+                status_color = "#166534" if analysis_meta.get("llm_used") else "#374151"
+                st.markdown(
+                    f"""
+                    <div style="border:1px solid #e5e7eb; border-radius:10px; padding:0.8rem 1rem; margin-bottom:0.9rem; background:#ffffff;">
+                        <div style="display:flex; flex-wrap:wrap; gap:0.55rem; align-items:center;">
+                            <span style="font-size:0.75rem; font-weight:700; letter-spacing:0.02em; color:#6b7280; text-transform:uppercase;">Analysis engine</span>
+                            <span style="background:{engine_bg}; color:#111827; border:1px solid #d1d5db; border-radius:999px; padding:0.2rem 0.6rem; font-size:0.8rem; font-weight:700;">{analysis_meta.get('engine_label', 'Standard ML + VADER')}</span>
+                            <span style="font-size:0.82rem; color:{status_color}; font-weight:600;">{analysis_meta.get('status', '')}</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
                 a_col1, a_col2 = st.columns([1, 1])
                 
                 with a_col1:
                     if sent_dist:
                         st.markdown("**Review Sentiment (Mood)**")
                         sent_df = pd.DataFrame(sent_dist)
-                        sent_chart = alt.Chart(sent_df).mark_bar().encode(
+                        sentiment_labels = {
+                            "Positive": "Positive feedback",
+                            "Neutral": "Neutral feedback",
+                            "Negative": "Negative feedback",
+                        }
+                        sent_df["Sentiment Label"] = sent_df["Sentiment"].map(sentiment_labels).fillna(sent_df["Sentiment"])
+                        sent_df["Display"] = sent_df.apply(
+                            lambda row: f"{row['Percentage']:.0%} ({int(row['Count'])})",
+                            axis=1,
+                        )
+                        sent_order = ["Positive feedback", "Neutral feedback", "Negative feedback"]
+                        label_inside_threshold = 0.18
+
+                        sent_chart = alt.Chart(sent_df).mark_bar(cornerRadiusEnd=5).encode(
                             x=alt.X("Percentage:Q", axis=alt.Axis(format=".0%", title=None)),
-                            y=alt.Y("Sentiment:N", title=None, sort=["Positive", "Neutral", "Negative"]),
+                            y=alt.Y("Sentiment Label:N", title=None, sort=sent_order),
                             color=alt.Color("Sentiment:N", scale=alt.Scale(
                                 domain=["Positive", "Neutral", "Negative"],
                                 range=["#10b981", "#9ca3af", "#ef4444"]
                             ), legend=None),
-                            tooltip=[alt.Tooltip("Sentiment:N"), alt.Tooltip("Percentage:Q", format=".1%")]
+                            tooltip=[
+                                alt.Tooltip("Sentiment Label:N", title="Mood"),
+                                alt.Tooltip("Percentage:Q", title="Share", format=".1%"),
+                                alt.Tooltip("Count:Q", title="Sentence count"),
+                            ]
                         ).properties(height=180)
                         
-                        # Add labels on bars
-                        sent_text = sent_chart.mark_text(align="left", baseline="middle", dx=5, fontWeight=600).encode(
-                            text=alt.Text("Percentage:Q", format=".0%")
+                        sent_text_inside = (
+                            alt.Chart(sent_df)
+                            .transform_filter(f"datum.Percentage >= {label_inside_threshold}")
+                            .transform_calculate(LabelX="datum.Percentage / 2")
+                            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff")
+                            .encode(
+                                x=alt.X("LabelX:Q"),
+                                y=alt.Y("Sentiment Label:N", sort=sent_order),
+                                text=alt.Text("Display:N"),
+                            )
                         )
-                        st.altair_chart(sent_chart + sent_text, use_container_width=True)
+                        sent_text_outside = (
+                            alt.Chart(sent_df)
+                            .transform_filter(f"datum.Percentage < {label_inside_threshold}")
+                            .mark_text(align="left", baseline="middle", dx=6, fontWeight=600, color="#374151")
+                            .encode(
+                                x=alt.X("Percentage:Q"),
+                                y=alt.Y("Sentiment Label:N", sort=sent_order),
+                                text=alt.Text("Display:N"),
+                            )
+                        )
+                        st.altair_chart(sent_chart + sent_text_inside + sent_text_outside, use_container_width=True)
+
+                        top_sent = sent_df.sort_values("Percentage", ascending=False).iloc[0]
+                        st.caption(
+                            f"Takeaway: {top_sent['Sentiment Label']} is most common at {top_sent['Percentage']:.0%} ({int(top_sent['Count'])})."
+                        )
                 
                 with a_col2:
                     if aspect_dist:
                         st.markdown("**Service Drivers (Share of Voice)**")
                         dist_df = pd.DataFrame(aspect_dist)
-                        dist_df["Legend Label"] = dist_df.apply(lambda x: f"{x['Topic']} ({x['Share (%)']:.0%})", axis=1)
-                        
-                        arc_chart = alt.Chart(dist_df).mark_arc(innerRadius=45).encode(
-                            theta=alt.Theta("Share (%):Q", stack=True),
-                            color=alt.Color(
-                                "Legend Label:N",
-                                sort=alt.SortField("Share (%)", order="descending"),
-                                legend=alt.Legend(title=None, orient="right", labelLimit=0, symbolLimit=0)
-                            ),
-                            tooltip=[alt.Tooltip("Topic:N"), alt.Tooltip("Share (%) :Q", format=".1%")]
+                        dist_df = dist_df.sort_values("Share (%)", ascending=False)
+                        topic_order = dist_df["Topic"].tolist()
+                        dist_df["Display"] = dist_df.apply(
+                            lambda row: f"{row['Share (%)']:.0%} ({int(row['Count'])})",
+                            axis=1,
+                        )
+                        driver_label_inside_threshold = 0.18
+
+                        drivers_chart = alt.Chart(dist_df).mark_bar(color="#4f46e5", cornerRadiusEnd=5).encode(
+                            x=alt.X("Share (%):Q", axis=alt.Axis(format=".0%", title=None)),
+                            y=alt.Y("Topic:N", title=None, sort=topic_order),
+                            tooltip=[
+                                alt.Tooltip("Topic:N", title="Driver"),
+                                alt.Tooltip("Share (%):Q", title="Share", format=".1%"),
+                                alt.Tooltip("Count:Q", title="Mentions"),
+                            ],
                         ).properties(height=180)
-                        st.altair_chart(arc_chart, use_container_width=True)
+                        drivers_text_inside = (
+                            alt.Chart(dist_df)
+                            .transform_filter(f"datum['Share (%)'] >= {driver_label_inside_threshold}")
+                            .transform_calculate(LabelX="datum['Share (%)'] / 2")
+                            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff")
+                            .encode(
+                                x=alt.X("LabelX:Q"),
+                                y=alt.Y("Topic:N", sort=topic_order),
+                                text=alt.Text("Display:N"),
+                            )
+                        )
+                        drivers_text_outside = (
+                            alt.Chart(dist_df)
+                            .transform_filter(f"datum['Share (%)'] < {driver_label_inside_threshold}")
+                            .mark_text(align="left", baseline="middle", dx=6, fontWeight=600, color="#374151")
+                            .encode(
+                                x=alt.X("Share (%):Q"),
+                                y=alt.Y("Topic:N", sort=topic_order),
+                                text=alt.Text("Display:N"),
+                            )
+                        )
+                        st.altair_chart(drivers_chart + drivers_text_inside + drivers_text_outside, use_container_width=True)
+
+                        top_driver = dist_df.iloc[0]
+                        st.caption(
+                            f"Takeaway: {top_driver['Topic']} is the top service driver at {top_driver['Share (%)']:.0%} ({int(top_driver['Count'])})."
+                        )
                 
                 st.write("")
                 
@@ -1848,13 +2016,31 @@ with tab_ml_predict:
                         <div style='background-color: #ffffff; color: #1f2937; border: 1px solid #e5e7eb; 
                                     padding: 1.5rem; border-radius: 0.5rem; font-size: 1.1rem; line-height: 1.8; 
                                     font-family: ui-sans-serif, system-ui, sans-serif; 
-                                    max-height: 400px; overflow-y: auto;'>
+                                    max-height: 400px; overflow-y: scroll; scrollbar-gutter: stable;'>
                             {annotated_text}
                         </div>
                         """, 
                         unsafe_allow_html=True
                     )
-                    st.caption("AI-identified segments are highlighted: 🟢 Positive, 🔴 Negative, ⚪ Neutral. Use the scrollbar for long reviews.")
+                    st.markdown(
+                        """
+                        <div style='text-align: center; margin-top: 0.75rem; padding: 0.55rem 0.5rem 0.65rem 0.5rem;'>
+                            <div style='display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.45rem 0.5rem; padding: 0.15rem 0;'>
+                                <span style='font-size: 0.78rem; letter-spacing: 0.03em; font-weight: 700; color: #6b7280; text-transform: uppercase; margin-right: 0.15rem;'>Legend</span>
+                                <span title='Positive comments: the sentence expresses a favorable customer view.' style='display: inline-flex; align-items: center; gap: 0.25rem; background: #dcfce7; color: #166534; border: 1px solid #86efac; border-radius: 999px; padding: 0.24rem 0.62rem; font-size: 0.82rem; font-weight: 700;'>
+                                    <span aria-hidden='true'>🟢</span> Positive
+                                </span>
+                                <span title='Negative comments: the sentence describes dissatisfaction or issues.' style='display: inline-flex; align-items: center; gap: 0.25rem; background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; border-radius: 999px; padding: 0.24rem 0.62rem; font-size: 0.82rem; font-weight: 700;'>
+                                    <span aria-hidden='true'>🔴</span> Negative
+                                </span>
+                                <span title='Neutral comments: the sentence is factual or emotionally balanced.' style='display: inline-flex; align-items: center; gap: 0.25rem; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 999px; padding: 0.24rem 0.62rem; font-size: 0.82rem; font-weight: 700;'>
+                                    <span aria-hidden='true'>⚪</span> Neutral
+                                </span>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
             
             elif st.session_state.get("review_analyzed"):
                 st.warning("Please enter some text to begin analysis.")
