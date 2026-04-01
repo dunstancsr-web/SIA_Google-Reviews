@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 import altair as alt
+import plotly.express as px
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 import pickle
 import os
@@ -1118,8 +1119,8 @@ time_series = (
     .reset_index()
 )
 
-tab_ml_predict, tab_overview, tab_explore, tab_export = st.tabs(
-    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export"]
+tab_ml_predict, tab_overview, tab_explore, tab_export, tab_insights = st.tabs(
+    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export", "🧠 Macro Insights"]
 )
 
 with tab_export:
@@ -2535,4 +2536,302 @@ with tab_ml_predict:
             
             elif st.session_state.get("review_analyzed"):
                 st.warning("Please enter some text to begin analysis.")
+
+
+with tab_insights:
+    st.markdown("## 🧠 Macro Review Insights", help="This tab simulates scoring a dataset with the loaded multi-model consensus engine.")
+    st.markdown("Execute the **Consensus Sentiment Engine** and **Actionable Tag Extraction** across a randomized sample of your *currently filtered dataset*. This leverages the same ensemble model logic to reveal macro trends, identify rating vs. sentiment gaps, and diagnose fleet health.")
+
+    st.write("")
+    
+    insight_text_col = "text" if "text" in df.columns else "content"
+    total_dataset_size = len(df.dropna(subset=[insight_text_col]))
+    max_dataset_size = len(filtered.dropna(subset=[insight_text_col]))
+    
+    # Callback to expand sidebar filters if the user requests more reviews than currently filtered
+    def auto_expand_date_filters():
+        st.session_state["trigger_macro_engine"] = True
+        requested = st.session_state.get("macro_sample_slider", 150)
+        # If the user drags the slider asking for more reviews than the current sidebar date window allows
+        if requested > max_dataset_size:
+            try:
+                # Calculate the absolute max boundary dates natively
+                full_starts = pd.date_range(
+                    min_date.to_period("M").to_timestamp(),
+                    max_date.to_period("M").to_timestamp(),
+                    freq="MS",
+                ).date
+                if len(full_starts) >= 2:
+                    # Overwrite the sidebar slider session state to maximum
+                    st.session_state["date_range_slider"] = (full_starts[0], full_starts[-1])
+                    st.toast("📅 Automatically expanded the Date Filters to supply the requested dataset volume.")
+            except Exception:
+                pass
+    
+    # 1. UI Controls
+    insight_cols = st.columns([1, 1, 2])
+    with insight_cols[0]:
+        valid_max = max(10, total_dataset_size)
+        sample_size = st.slider(
+            "Sample size (reviews)", 
+            min_value=10, 
+            max_value=valid_max, 
+            value=min(150, max_dataset_size) if "macro_sample_slider" not in st.session_state else st.session_state["macro_sample_slider"], 
+            step=50, 
+            key="macro_sample_slider",
+            on_change=auto_expand_date_filters,
+            help="Select the exact volume of random reviews to process. Note: If you request more reviews than currently exist in your Date Filter range, the Sidebar Dates will automatically expand to pull them in."
+        )
+    with insight_cols[1]:
+        st.write("")
+        st.write("")
+        run_engine = st.button("🚀 Execute Engine", type="primary", use_container_width=True)
+
+    if run_engine or st.session_state.get("trigger_macro_engine", False):
+        st.session_state["trigger_macro_engine"] = False # Reset so it does not loop
+        with st.spinner(f"Igniting ML Consensus Engine across {sample_size} records..."):
+            
+            # Setup Models (using the cached multi-model bundle)
+            model_bundle = load_ml_models()
+            rating_models = model_bundle.get("rating_models", {})
+            dealbreakers = model_bundle.get("dealbreakers", {})
+            _analyzer = get_vader_analyzer()
+            
+            # Define text column securely
+            text_col = "text" if "text" in filtered.columns else "content"
+            
+            # Safe sample
+            safe_size = min(len(filtered.dropna(subset=[text_col])), sample_size)
+            sample_df = filtered.dropna(subset=[text_col]).sample(safe_size)
+            
+            results = []
+            
+            # UX Progress
+            progress_bar = st.progress(0)
+            
+            for index, row in enumerate(sample_df.itertuples()):
+                rv_text = str(getattr(row, text_col))
+                actual_rating = float(getattr(row, "rating", 0))
+                
+                # Preprocessing core identical to single predict tab
+                input_clean = re.sub(r'[^a-z0-9\s]', '', rv_text.lower()).strip()
+                vader_score = _analyzer.polarity_scores(rv_text)['compound']
+                
+                if vader_score > 0.05:
+                    vader_class = "Positive"
+                elif vader_score < -0.05:
+                    vader_class = "Negative"
+                else:
+                    vader_class = "Neutral"
+                    
+                _sentences = re.split(r'[.!?]', rv_text)
+                _sent_scores = [_analyzer.polarity_scores(s)['compound'] for s in _sentences if s.strip()]
+                vader_min = min(_sent_scores) if _sent_scores else 0.0
+                vader_max = max(_sent_scores) if _sent_scores else 0.0
+                vader_range = vader_max - vader_min
+                
+                _words = set(input_clean.split())
+                has_neg_db = 1 if _words & dealbreakers.get("neg", set()) else 0
+                has_pos_db = 1 if _words & dealbreakers.get("pos", set()) else 0
+                
+                # Valid DataFrame format for our trained custom Pipeline
+                X_sample = pd.DataFrame({
+                    "clean_text": [input_clean],
+                    "vader_score": [vader_score],
+                    "vader_class": [vader_class],
+                    "vader_min": [vader_min],
+                    "vader_max": [vader_max],
+                    "vader_range": [vader_range],
+                    "has_neg_dealbreaker": [has_neg_db],
+                    "has_pos_dealbreaker": [has_pos_db]
+                })
+                
+                # 2. Consensus Predictions
+                try:
+                    model_preds = [float(m.predict(X_sample)[0]) for m in rating_models.values()]
+                    consensus_score = sum(model_preds) / len(model_preds)
+                    divergence = np.std(model_preds) if len(model_preds) > 1 else 0
+                except Exception as e:
+                    consensus_score = 3.0
+                    divergence = 0.0
+                
+                # 3. Fast Routing Tags (Always use local logic for batch to save time/cost)
+                detected_tags, _, _, _, _ = extract_aspect_tags(rv_text, use_llm=False)
+                
+                results.append({
+                    "text_snippet": rv_text[:60] + "..." if len(rv_text) > 60 else rv_text,
+                    "actual_rating": actual_rating,
+                    "predicted_rating": consensus_score,
+                    "vader_polarity": vader_score,
+                    "divergence": divergence,
+                    "_engine_tags": detected_tags.copy(), # Hidden column for chart rendering
+                    "routing_tags": detected_tags
+                })
+                
+                progress_bar.progress((index + 1) / safe_size)
+                
+            progress_bar.empty()
+            
+            if results:
+                st.success(f"Successfully processed {safe_size} reviews through the ensemble engine.")
+                results_df = pd.DataFrame(results)
+                
+                st.divider()
+                
+                # --- KPI Layer ---
+                m1, m2, m3, m4 = st.columns(4)
+                
+                flagged_count = len(results_df[results_df['divergence'] >= 0.5])
+                m1.metric(
+                    "High Divergence Warnings", 
+                    f"{flagged_count}", 
+                    f"{(flagged_count/safe_size)*100:.1f}% of batch",
+                    delta_color="inverse",
+                    help="Reviews that heavily split the committee's vote (StdDev >= 0.5). Typically sarcastic or complex."
+                )
+                
+                avg_actual = results_df['actual_rating'].mean()
+                avg_pred = results_df['predicted_rating'].mean()
+                m2.metric(
+                    "Avg Panel Prediction", 
+                    f"{avg_pred:.2f} ★", 
+                    f"{(avg_pred - avg_actual):.2f} vs Actual",
+                    help="The aggregate consensus score compared to the mathematical actual star ratings left by users."
+                )
+                
+                avg_vader = results_df['vader_polarity'].mean()
+                vader_dir = "Positive" if avg_vader > 0 else "Negative"
+                m3.metric(
+                    "Fleet Emotional Polarity", 
+                    f"{avg_vader:.2f}",
+                    vader_dir,
+                    help="Vader algorithmic emotional intensity scale (-1.0 to 1.0). Independent of star rating."
+                )
+                
+                tag_presence = results_df['routing_tags'].apply(len).mean()
+                m4.metric(
+                    "Tags Per Review", 
+                    f"{tag_presence:.1f}",
+                    help="Average number of actionable routing tags correctly surfaced per review."
+                )
+                
+                st.write("")
+                
+                # --- Charting Layer ---
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    st.markdown("**Top Actionable Drivers (Categorical)**")
+                    all_tags = []
+                    for t_list in results_df['_engine_tags']:
+                        all_tags.extend(t_list)
+                    
+                    if all_tags:
+                        import plotly.express as px
+                        
+                        tag_counts = pd.Series(all_tags).value_counts().head(10).reset_index()
+                        tag_counts.columns = ['Routing Tag', 'Volume']
+                        
+                        plotly_labels = []
+                        bar_colors = []
+                        hover_labels = []
+                        
+                        for tag in tag_counts['Routing Tag']:
+                            clean_name = tag[2:].strip() if tag[0] in ['🟢', '🔴', '⚪'] else tag
+                            if tag.startswith("🟢"):
+                                dot_color = "#059669" # Rich Emerald
+                                bar_color = "#10b981" # Soft Emerald
+                            elif tag.startswith("🔴"):
+                                dot_color = "#b91c1c" # Rich Red
+                                bar_color = "#ef4444" # Soft Red
+                            else:
+                                dot_color = "#4b5563" # Rich Gray
+                                bar_color = "#9ca3af" # Soft Gray
+                                
+                            plotly_labels.append(f"<span style='color: {dot_color}; font-size: 16px;'>●</span> <b>{clean_name}</b>")
+                            bar_colors.append(bar_color)
+                            hover_labels.append(clean_name)
+                            
+                        tag_counts['Custom Label'] = plotly_labels
+                        tag_counts['Color'] = bar_colors
+                        tag_counts['Hover_Name'] = hover_labels
+                        
+                        tag_counts = tag_counts.sort_values("Volume", ascending=True)
+                        
+                        fig = px.bar(
+                            tag_counts,
+                            x="Volume",
+                            y="Custom Label",
+                            orientation='h',
+                            color="Color",
+                            color_discrete_map="identity",
+                            text="Volume",
+                            custom_data=['Hover_Name']
+                        )
+                        
+                        fig.update_layout(
+                            font_family="ui-sans-serif, system-ui, -apple-system, sans-serif",
+                            margin=dict(l=0, r=40, t=20, b=0), # Extra right margin prevents label cut-off
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            xaxis=dict(visible=False, showgrid=False),
+                            yaxis=dict(
+                                title="", 
+                                showgrid=False, 
+                                showline=False,
+                                zeroline=False,
+                                tickfont=dict(size=14, color="#374151")
+                            ),
+                            showlegend=False,
+                            hovermode="closest", # Forces tooltips to render straight to the cursor instead of diagonally linking to the y-axis
+                            height=340,
+                            dragmode=False, # Prevents accidental zooming breaking the UI
+                            hoverlabel=dict(
+                                bgcolor="#ffffff",
+                                font_size=13,
+                                font_family="ui-sans-serif, system-ui, sans-serif",
+                                font_color="#111827",
+                                bordercolor="#e5e7eb",
+                                align="left"
+                            )
+                        )
+                        
+                        fig.update_traces(
+                            textposition="outside",
+                            texttemplate=" %{x} ", # Add slight padding between bar and number
+                            textfont=dict(color="#4b5563", size=13, weight="bold"),
+                            cliponaxis=False, # CRITICAL: allows the text to overflow outside the plotting area
+                            hovertemplate="<b>%{customdata[0]}</b><br>Volume: %{x} mentions<extra></extra>",
+                            marker=dict(opacity=0.85, line=dict(width=0))
+                        )
+                        
+                        # config={'displayModeBar': False} completely hides the distracting Plotly toolbar
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'staticPlot': False})
+                    else:
+                        st.info("No actionable tags found in this sample.")
+                
+                with c2:
+                    st.markdown("**Sentiment vs. Star Rating (Discrepancy Matrix)**")
+                    st.caption("Locate harsh emotion disguised as high star ratings (bottom right).")
+                    
+                    scatter_chart = alt.Chart(results_df).mark_circle(size=80, opacity=0.7).encode(
+                        x=alt.X('actual_rating:O', title="Actual User Star Rating"),
+                        y=alt.Y('vader_polarity:Q', title="Emotional Polarity (-1 to 1)"),
+                        color=alt.Color(
+                            'divergence:Q', 
+                            scale=alt.Scale(scheme='turbo'), 
+                            title='Model Divergence (Warning)'
+                        ),
+                        tooltip=['actual_rating', 'predicted_rating', 'vader_polarity', 'divergence', 'text_snippet']
+                    ).properties(height=320)
+                    
+                    # Add zero line for emotion
+                    hline = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='red', strokeDash=[2,2], opacity=0.5).encode(y='y:Q')
+                    
+                    st.altair_chart(scatter_chart + hline, use_container_width=True)
+                
+                st.write("")
+                st.markdown("**Processed Enforcement Data**")
+                display_df = results_df.drop(columns=['_engine_tags'])
+                st.dataframe(display_df, use_container_width=True)
 
