@@ -1,0 +1,18 @@
+{
+  "test_accuracy": 0.6049,
+  "train_accuracy": 0.7974,
+  "accuracy": 0.6049,
+  "display_name": "Logistic Regression",
+  "trained_at": "2026-04-01T22:35:07.856724",
+  "feature_streams": 5,
+  "features": [
+    "clean_text",
+    "vader_score",
+    "vader_class",
+    "vader_min",
+    "vader_max",
+    "vader_range",
+    "has_neg_dealbreaker",
+    "has_pos_dealbreaker"
+  ]
+}

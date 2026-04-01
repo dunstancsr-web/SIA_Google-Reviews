@@ -23,37 +23,84 @@ except Exception:
 @st.cache_resource
 def load_ml_models():
     """
-    Loads all available 'Strict Mode' Pipeline models and the Aspect Engine in a structured way.
+    Loads rating models, aspect engine, dealbreaker words, and dynamic benchmarks.
     """
     try:
-        models = {} # Star Rating Models
+        models = {}
         aspect_model = None
+        benchmarks = {}
+        dealbreaker_words = {"neg": set(), "pos": set()}
         
         model_files = {
-            "Logistic Regression": "models/lr_model.pkl",
-            "Random Forest": "models/rf_model.pkl",
-            "Linear SVM": "models/svc_model.pkl"
+            "Logistic Regression": ("models/lr_model.pkl", "models/lr_meta.json"),
+            "Random Forest": ("models/rf_model.pkl", "models/rf_meta.json"),
+            "Linear SVM": ("models/svc_model.pkl", "models/svc_meta.json")
         }
         
-        for name, path in model_files.items():
-            if os.path.exists(path):
-                with open(path, 'rb') as f:
+        for name, (pkl_path, meta_path) in model_files.items():
+            if os.path.exists(pkl_path):
+                with open(pkl_path, 'rb') as f:
                     m = pickle.load(f)
                     if name == "Logistic Regression":
                         clf_step = m.named_steps.get('clf')
                         if clf_step and not hasattr(clf_step, 'multi_class'):
                             clf_step.multi_class = 'auto'
                     models[name] = m
+            # Load dynamic benchmark accuracy
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    m_meta = json.load(f)
+                    # Load Test Acc as primary benchmark
+                    benchmarks[name] = m_meta.get("test_accuracy", m_meta.get("accuracy", 0.5))
+                    # Load Train Acc for the audit table
+                    benchmarks[name + "_train"] = m_meta.get("train_accuracy", 0.8)
+            else:
+                benchmarks[name] = 0.5
                     
-        # Load the Autonomous Aspect Engine separately
+        # Load the Autonomous Aspect Engine
         aspect_path = "models/aspect_model.pkl"
         if os.path.exists(aspect_path):
             with open(aspect_path, 'rb') as f:
                 aspect_model = pickle.load(f)
+        
+        # Load dealbreaker words
+        db_path = "models/dealbreaker_words.json"
+        if os.path.exists(db_path):
+            with open(db_path) as f:
+                db = json.load(f)
+                dealbreaker_words["neg"] = set(db.get("1", []) + db.get("2", []))
+                dealbreaker_words["pos"] = set(db.get("4", []) + db.get("5", []))
                     
-        return {"rating": models, "aspect": aspect_model}
+        return {"rating": models, "aspect": aspect_model,
+                "benchmarks": benchmarks, "dealbreakers": dealbreaker_words}
     except Exception as e:
-        return {"rating": {}, "aspect": None}
+        return {"rating": {}, "aspect": None,
+                "benchmarks": {}, "dealbreakers": {"neg": set(), "pos": set()}}
+
+def render_star_rating(score, color="#ca8a04"):
+    """
+    Renders 5 stars with partial fill based on the fractional score using inline SVGs.
+    Utilizes a custom CSS tooltip system.
+    """
+    hover_text = f"{score:.1f} STARS"
+    stars_html = f'<div class="star-v2-container" data-tooltip="{hover_text}" style="gap: 4px; align-items: center;">'
+    for i in range(1, 6):
+        fill_pct = max(0, min(100, (score - (i - 1)) * 100))
+        grad_id = f"starGrad_{i}_{str(score).replace('.','_')}"
+        
+        stars_html += f"""
+            <svg width="22" height="22" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 1px 1px rgba(0,0,0,0.05)); pointer-events: none;">
+                <defs>
+                    <linearGradient id="{grad_id}">
+                        <stop offset="{fill_pct}%" stop-color="{color}"/>
+                        <stop offset="{fill_pct}%" stop-color="#e5e7eb"/>
+                    </linearGradient>
+                </defs>
+                <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="url(#{grad_id})"/>
+            </svg>
+        """
+    stars_html += '</div>'
+    return stars_html
 
 @st.cache_resource
 def get_vader_analyzer():
@@ -286,6 +333,28 @@ st.markdown(
             border-radius: 6px;
         }
         
+        /* Voting Breakdown Toggle (CSS checkbox hack) */
+        .voting-breakdown-panel {
+            display: none;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+            animation: fadeIn 0.3s ease;
+        }
+        #voting-toggle:checked ~ .voting-breakdown-panel {
+            display: block;
+        }
+        #voting-toggle:checked ~ label[for="voting-toggle"] {
+            opacity: 0.5;
+        }
+        label[for="voting-toggle"]:hover {
+            opacity: 0.8 !important;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
         /* Tick markers for Model Votes */
         .tick-marker {
             position: absolute;
@@ -314,8 +383,10 @@ st.markdown(
             bottom: 100%;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.85);
-            color: white;
+            background: #ffffff;
+            color: #111827;
+            border: 1px solid #e5e7eb;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
             padding: 6px 10px;
             border-radius: 4px;
             font-size: 12px;
@@ -343,6 +414,81 @@ st.markdown(
             border: 1px solid rgba(0,0,0,0.1);
             background-color: #ffffff;
             box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        
+        /* Custom Star Tooltip System */
+        .star-v2-container {
+            position: relative;
+            display: inline-flex;
+            cursor: help;
+        }
+        .star-v2-container::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #ffffff;
+            color: #111827;
+            border: 1px solid #e5e7eb;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+            pointer-events: none;
+            opacity: 0;
+            transition: all 0.2s ease;
+            z-index: 9999;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        .star-v2-container:hover::after {
+            opacity: 1;
+        }
+        
+        /* Custom HTML Native Tooltip for Hero Card Headers */
+        .sia-tooltip-wrap:hover .sia-popover {
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+        .sia-tooltip-wrap:hover svg {
+            fill: #4b5563 !important;
+        }
+        .star-v2-container:hover::after {
+            opacity: 1;
+        }
+        
+        /* Sausage (Math Audit) Tooltip - Genuine HTML Container */
+        .sausage-wrap {
+            position: relative;
+            display: inline-block;
+            cursor: help;
+            border-bottom: 1.5px dashed #6b7280;
+        }
+        .sausage-content {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: #ffffff;
+            color: #111827;
+            padding: 20px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+            white-space: nowrap;
+            z-index: 10005;
+            min-width: 400px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.25), 0 8px 15px rgba(0,0,0,0.1);
+            border: 1px solid #d1d5db;
+            margin-top: 10px;
+            text-align: left;
+            text-transform: none; /* Prevent uppercase inheritance */
+            letter-spacing: normal;
+        }
+        .sausage-wrap:hover .sausage-content {
+            display: block;
         }
     </style>
     """,
@@ -973,7 +1119,7 @@ time_series = (
 )
 
 tab_ml_predict, tab_overview, tab_explore, tab_export = st.tabs(
-    ["ML: Predict Rating", "Overview", "Data Exploration", "Data & Export"]
+    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export"]
 )
 
 with tab_export:
@@ -1512,17 +1658,20 @@ with tab_ml_predict:
                             
                 if valid_sentences:
                     prompt = (
-                        "You are an expert aviation operations analyst. Your task is to perform STRICT aspect-based sentiment analysis on sentences from a Singapore Airlines review.\n\n"
-                        "RULES:\n"
-                        "1. Only assign a topic if the sentence explicitly discusses it. Valid topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
-                        "2. Sentiment (Positive, Negative, Neutral) MUST be evaluated from the perspective of Singapore Airlines (SIA).\n"
-                        "3. EXPLICIT COMPARISONS: If a customer says 'other airlines have better food' or 'crew on XYZ airline did a much better job', this is a strictly NEGATIVE sentiment for SIA.\n"
-                        "4. SARCASM: 'Great job losing my luggage' or 'Thanks for the 5 hour delay' are strictly NEGATIVE.\n"
-                        "5. FACTUAL: If a sentence is purely factual ('I booked a flight to London'), return empty topics [].\n\n"
-                        "INPUT SENTENCES:\n"
+                        "You are a specialized aviation data parser. Respond ONLY with a valid JSON array. No preamble. No markdown. No explanations.\n\n"
+                        "STRICT OUTPUT SCHEMA:\n"
+                        '[{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]\n\n'
+                        "TAXONOMY RULES:\n"
+                        "1. Use ONLY these topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
+                        "2. EXPLICIT COMPETITOR MENTIONS: If they praise a competitor (e.g., 'Emirates has better seats'), that is a 'Negative' sentiment for SIA.\n"
+                        "3. SARCASM: Phrases like 'Thanks for the 5-hour wait' are 'Negative'.\n"
+                        "4. FACTUAL: If no topic is mentioned, return [].\n\n"
+                        "ONE-SHOT EXAMPLE:\n"
+                        '[{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]\n\n'
+                        "INPUT DATA:\n"
                     )
-                    prompt += json.dumps(valid_sentences) + "\n\n"
-                    prompt += 'Respond ONLY with a JSON array mapping the ids exactly. Do not include markdown. Example:\n[{"id": 0, "topics": ["Staff & Service"], "sentiment": "Negative"}]'
+                    prompt += json.dumps(valid_sentences)
+
                     
                     try:
                         llm_out = ""
@@ -1745,6 +1894,7 @@ with tab_ml_predict:
         model_bundle = load_ml_models()
         rating_models = model_bundle.get("rating", {})
         aspect_engine = model_bundle.get("aspect")
+        dealbreakers = model_bundle.get("dealbreakers", {"neg": set(), "pos": set()})
 
         with st.container():
             if "review_input_text" not in st.session_state:
@@ -1831,84 +1981,107 @@ with tab_ml_predict:
                     args=(sample_reviews["5_star"],),
                 )
 
-            st.markdown("**Analysis Settings**")
-            settings_col1, settings_col2 = st.columns([1.25, 1.25])
+            st.write("") # Add a bit of spatial breathing room
 
-            with settings_col1:
-                # Rating engine (advanced setting)
-                if rating_models:
-                    engine_options = list(rating_models.keys())
-                    selected_model_name = st.session_state.get("selected_rating_engine", engine_options[0])
-                    if selected_model_name not in engine_options:
-                        selected_model_name = engine_options[0]
+            # 1. Primary Modifier - The AI Toggle
+            selected_ai_backend = st.session_state.get("selected_ai_model", "auto")
+            groq_api_ready = bool(os.environ.get("GROQ_API_KEY", ""))
 
-                    st.caption(f"Current engine: {selected_model_name}")
+            # Build dynamic help text with current status
+            _use_llm_current = st.session_state.get("_smart_ai_toggle", False)
+            if not _use_llm_current:
+                current_status = ":blue[●] Basic keyword detection (fastest, works offline)"
+            elif (selected_ai_backend == "groq" and groq_api_ready) or (selected_ai_backend == "auto" and groq_api_ready):
+                current_status = ":green[●] Smart AI active (Groq cloud)"
+            elif selected_ai_backend == "ollama" or (selected_ai_backend == "auto" and not groq_api_ready):
+                current_status = ":green[●] Smart AI active (local Ollama)"
+            else:
+                current_status = ":blue[●] Basic keyword detection (no AI service found)"
 
-                    model_profile = {
-                        "Logistic Regression": "Balanced profile: strong general-purpose baseline.",
-                        "Random Forest": "Detailed profile: captures nonlinear patterns.",
-                        "Linear SVM": "Strict profile: sharper class boundaries.",
-                    }
+            help_text = (
+                f"**Current mode:** {current_status}\n\n---\n\n"
+                "**When ON:** A cloud-based AI identifies specific topics in the review "
+                "(e.g., food quality, seat comfort) for richer, more nuanced analysis.\n\n"
+                "**When OFF:** Uses basic keyword detection only — fastest and works offline, but less nuanced."
+            )
 
-                    with st.expander("Advanced settings", expanded=False):
-                        selected_model_name = st.selectbox(
-                            "Rating Engine",
-                            options=engine_options,
-                            index=engine_options.index(selected_model_name),
-                            key="selected_rating_engine",
-                            help="Choose the model that drives the star rating prediction used in the main report.",
+            use_llm = st.toggle(
+                "Use Smart AI Analysis",
+                value=False,
+                key="_smart_ai_toggle",
+                help=help_text,
+            )
+
+            # 2. Secondary Modifiers - Advanced Settings Expander
+            if rating_models:
+                engine_options = list(rating_models.keys())
+                selected_model_name = st.session_state.get("selected_rating_engine", engine_options[0])
+                if selected_model_name not in engine_options:
+                    selected_model_name = engine_options[0]
+
+                with st.expander("Advanced settings", expanded=False):
+                    st.markdown("🎯 **Consensus Calibration (Fine-Tuning)**")
+                    st.info("The **1.0x Baseline** reflects the AI model's accuracy on the most recent hold-out test set from the training phase. Adjust the multipliers below to increase or decrease a model's influence on the final consensus rating.")
+                    
+                    for m_name in engine_options:
+                        st.slider(
+                            f"Weight Multiplier: {m_name}",
+                            min_value=0.5,
+                            max_value=2.0,
+                            value=1.0,
+                            step=0.05,
+                            key=f"weight_mult_{m_name}",
+                            help=f"Manually adjust the influence of {m_name} in the final committee vote."
                         )
-                        selected_model_key = str(selected_model_name) if selected_model_name is not None else ""
-                        st.caption(model_profile.get(selected_model_key, "Model selected for rating prediction."))
-                else:
-                    selected_model_name = "None"
+            else:
+                selected_model_name = "None"
 
-            with settings_col2:
-                use_llm = st.toggle(
-                    "AI-assisted routing",
-                    value=True,
-                    help="When enabled, uses Groq/Ollama for richer context. When disabled, uses local routing only.",
-                )
-                selected_ai_backend = st.session_state.get("selected_ai_model", "auto")
-                groq_api_ready = bool(os.environ.get("GROQ_API_KEY", ""))
-
-                if not use_llm:
-                    st.caption("Status: Local routing only (fastest, no external LLM calls).")
-                else:
-                    if selected_ai_backend == "groq":
-                        if groq_api_ready:
-                            st.caption("Status: AI-assisted routing active via Groq cloud.")
-                        else:
-                            st.warning("Groq is selected but GROQ_API_KEY is missing. Routing will fall back to local mode.")
-                    elif selected_ai_backend == "ollama":
-                        st.caption("Status: AI-assisted routing via Ollama local service.")
-                    else:
-                        if groq_api_ready:
-                            st.caption("Status: Auto mode is using Groq cloud.")
-                        else:
-                            st.caption("Status: Auto mode is using Ollama/local fallback.")
-
-            if st.button("Analyze Review", type="secondary", use_container_width=True):
+            st.write("")
+            
+            # 3. Call to Action Button
+            if st.button("Analyze Review", type="primary", use_container_width=True):
                 st.session_state["review_analyzed"] = True
             
             if st.session_state.get("review_analyzed") and review_input.strip() and rating_models:
                 input_clean = re.sub(r'[^a-z0-9\s]', '', review_input.lower()).strip()
-                vader_score = get_vader_analyzer().polarity_scores(review_input)['compound']
+                _analyzer = get_vader_analyzer()
+                vader_score = _analyzer.polarity_scores(review_input)['compound']
                 
-                # Create the DataFrame input expected by the ColumnTransformer Pipeline
+                # VADER class label
+                if vader_score > 0.05:
+                    vader_class = "Positive"
+                elif vader_score < -0.05:
+                    vader_class = "Negative"
+                else:
+                    vader_class = "Neutral"
+                
+                # Sentence-level VADER features
+                _sentences = re.split(r'[.!?]', review_input)
+                _sent_scores = [_analyzer.polarity_scores(s)['compound'] for s in _sentences if s.strip()]
+                vader_min = min(_sent_scores) if _sent_scores else 0.0
+                vader_max = max(_sent_scores) if _sent_scores else 0.0
+                vader_range = vader_max - vader_min
+                
+                # Dealbreaker flags
+                _words = set(input_clean.split())
+                has_neg_db = 1 if _words & dealbreakers.get("neg", set()) else 0
+                has_pos_db = 1 if _words & dealbreakers.get("pos", set()) else 0
+                
+                # Build the full 5-stream DataFrame expected by the new Pipeline
                 X_input = pd.DataFrame({
                     "clean_text": [input_clean],
-                    "vader_score": [vader_score]
+                    "vader_score": [vader_score],
+                    "vader_class": [vader_class],
+                    "vader_min": [vader_min],
+                    "vader_max": [vader_max],
+                    "vader_range": [vader_range],
+                    "has_neg_dealbreaker": [has_neg_db],
+                    "has_pos_dealbreaker": [has_pos_db]
                 })
                 
                 # --- TOURNAMENT PREDICTIONS ---
-                # Benchmarked Accuracies from recent Strictly Balanced training run
-                # We use these as weights for the "Optimized Consensus" score
-                benchmarks = {
-                    "Logistic Regression": 0.561,
-                    "Random Forest": 0.583,
-                    "Linear SVM": 0.579
-                }
+                # Dynamic benchmarks loaded from model metadata
+                benchmarks = model_bundle.get("benchmarks", {})
                 
                 all_results = []
                 model_weighted_scores = []
@@ -1930,13 +2103,93 @@ with tab_ml_predict:
                     all_results.append({
                         "Model": name, 
                         "Predicted Rating": f"{res} ⭐", 
-                        "Individual Continuum": f"{weighted_rating:.2f} ⭐",
                         "In-Text Confidence": f"{conf:.1%}",
-                        "Benchmark Accuracy": f"{weight*100:.1f}%"
+                        "Train Accuracy": f"{benchmarks.get(name + '_train', 0.8)*100:.1f}%",
+                        "Test Accuracy": f"{weight*100:.1f}%",
+                        "Rating Logic": f"{weighted_rating:.2f} ⭐"
                     })
                 
                 # --- CONSENSUS CALCULATIONS ---
-                consensus_score = sum(model_weighted_scores) / total_weight if total_weight > 0 else 3.0
+                sausage_lines = []
+                weighted_sum = 0
+                total_weight = 0
+                # Collector for Categorical Votes (Winner-Takes-All)
+                categorical_votes = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0}
+                vote_breakdown = []
+
+                for name, m in rating_models.items():
+                    # Base Benchmark Weight (from training accuracy)
+                    base_w = benchmarks.get(name, 0.5)
+                    # User Manual Multiplier
+                    multiplier = st.session_state.get(f"weight_mult_{name}", 1.0)
+                    # Effective Weight used in consensus
+                    effective_w = base_w * multiplier
+                    
+                    # 1. THE WINNER VOTE
+                    res = int(m.predict(X_input)[0])
+                    categorical_votes[res] += effective_w
+                    vote_breakdown.append({"name": name, "star": res, "base_w": base_w, "mult": multiplier, "eff_w": effective_w})
+                    
+                    # 2. THE CONTINUUM CALC (Math Balance Sheet)
+                    s = [sum((i+1) * r[i] for i in range(5)) for r in [m.predict_proba(X_input)[0]]][0]
+                    sausage_lines.append(f"• {name.upper()}:\n  {s:.2f} Rating × {base_w:.2f} (Base Acc) × {multiplier:.1f} (Manual) = {s*effective_w:.3f}")
+                    weighted_sum += (s * effective_w)
+                    total_weight += effective_w
+                
+                # DERIVE FINAL TOURNAMENT VALUES
+                consensus_winner = max(categorical_votes, key=categorical_votes.get)
+                continuum_score = weighted_sum / total_weight if total_weight > 0 else 3.0
+                
+                consensus_score = weighted_sum / total_weight if total_weight > 0 else 3.0
+                
+                # Build the Voting Breakdown HTML
+                # Section 1: Individual Votes
+                votes_html_lines = ""
+                for v in vote_breakdown:
+                    votes_html_lines += (
+                        f"<div style='margin-bottom: 10px; padding: 8px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb;'>"
+                        f"<b>{v['name'].upper()}</b> voted <b style='color: #111827;'>{v['star']}★</b><br>"
+                        f"<span style='font-size: 0.8rem; color: #6b7280;'>Weight: {v['base_w']:.2f} (Test Accuracy) × {v['mult']:.1f} (Multiplier) = <b>{v['eff_w']:.2f}</b></span>"
+                        f"</div>"
+                    )
+                
+                # Section 2: Vote Tally
+                tally_lines = ""
+                for star in sorted(categorical_votes.keys(), reverse=True):
+                    w = categorical_votes[star]
+                    if w > 0:
+                        # Show which models contributed
+                        contributors = [v['name'].upper() for v in vote_breakdown if v['star'] == star]
+                        contrib_str = " + ".join([f"{v['eff_w']:.2f}" for v in vote_breakdown if v['star'] == star])
+                        highlight = ' style="font-weight: 800; color: #16a34a;"' if star == consensus_winner else ''
+                        tally_lines += f"<div{highlight}>{star}★ bucket: {contrib_str} = <b>{w:.2f}</b> ({', '.join(contributors)})</div>"
+                
+                voting_breakdown_html = f"""
+                <div style='font-family: "Source Sans Pro", -apple-system, sans-serif; font-size: 0.88rem; line-height: 1.7;'>
+                    <div style='border-bottom: 2px solid #111827; padding-bottom: 8px; margin-bottom: 12px;'>
+                        <b style='font-size: 0.9rem;'>CONSENSUS VOTING BREAKDOWN</b><br>
+                        <span style='font-size: 0.75rem; color: #6b7280;'>How the Predicted Rating is Derived</span>
+                    </div>
+                    <b style='color: #15803d; font-size: 0.8rem;'>FORMULA</b><br>
+                    <div style='background: #f0fdf4; padding: 8px; border-radius: 6px; margin: 6px 0 12px 0; border: 1px solid #bbf7d0;'>
+                        Consensus Winner = Star rating with highest Σ(Test Accuracy × Multiplier)
+                    </div>
+                    <b style='color: #1f2937; font-size: 0.8rem;'>STEP 1: INDIVIDUAL MODEL VOTES</b><br>
+                    <div style='margin: 6px 0 12px 0;'>{votes_html_lines}</div>
+                    <b style='color: #1f2937; font-size: 0.8rem;'>STEP 2: VOTE TALLY</b><br>
+                    <div style='background: #f9fafb; padding: 12px; border-radius: 8px; margin: 6px 0; border: 1px solid #e5e7eb;'>
+                        {tally_lines}
+                    </div>
+                    <div style='background: #f0fdf4; padding: 12px; border-radius: 8px; margin-top: 8px; border: 2px solid #16a34a;'>
+                        <span style='font-size: 1rem; font-weight: 800; color: #111827;'>CONSENSUS WINNER: {consensus_winner}★</span><br>
+                        <span style='font-size: 0.75rem; color: #6b7280;'>Highest weighted tally: {categorical_votes[consensus_winner]:.2f}</span>
+                        <div style='margin-top: 8px; padding-top: 8px; border-top: 1px solid #bbf7d0; font-size: 0.75rem; color: #6b7280; line-height: 1.5;'>
+                            The star rating with the highest combined weight wins the consensus.<br>
+                            Each model's weight is based on its test accuracy — more accurate models have a stronger vote.
+                        </div>
+                    </div>
+                </div>
+                """
                 
                 # Divergence (Standard Deviation of the 3 model opinions)
                 # Helps identify ambiguous/challenging reviews
@@ -1957,76 +2210,113 @@ with tab_ml_predict:
                 st.caption("Results are organized from summary to detail. Start with the verdict card, then open optional detail sections as needed.")
                 
                 # --- 0. MULTI-MODEL TOURNAMENT SUMMARY ---
-                with st.expander("🧬 Model consensus details (optional)", expanded=False):
+                st.subheader("🧬 Model Tournament Consensus", help="**How is this calculated?** During training, we use an 80/20 split. **Train Accuracy:** How well the model learned the historical data. **Test Accuracy:** How well it handles brand new data. We use the Test Accuracy as the 'Expert Weight' for the final star consensus.")
+                with st.expander("Consensus Ledger & Stability Audit", expanded=False):
                     st.table(all_results)
-                    st.caption("Consensus blends model outputs using benchmark-weighted accuracy.")
+                    st.info("**What do these columns mean?**\n- **Train Accuracy:** The AI's performance on the 'study guide' (data it saw during training).\n- **Test Accuracy (Benchmark):** The performance on the 'final exam' (brand new data). We use this as the model's 'Expert Weight.'\n- **In-Text Confidence:** How sure the AI is about *this particular review* right now.\n- **Rating Logic:** A probability-weighted formula: $(1 \\times P_{1★}) + (2 \\times P_{2★}) + (3 \\times P_{3★}) + (4 \\times P_{4★}) + (5 \\times P_{5★})$. This explains the 'continuum' of sentiment even if a model picks a single winner.")
                 st.write("")
                 
                 # --- 1. THE PREMIUM VERDICT HERO (UI/UX) ---
-                # Determine colors based on prediction
-                if prediction >= 5:
-                    h_bg, h_border, h_text = "#fef9c3", "#ca8a04", "#854d0e" # Gold Theme
-                elif prediction >= 4:
-                    h_bg, h_border, h_text = "#f0fdf4", "#16a34a", "#166534" # Green Theme
-                elif prediction >= 3:
-                    h_bg, h_border, h_text = "#fffbeb", "#d97706", "#92400e" # Amber Theme
+                # Use the Consensus Winner (Categorical) for the primary card display
+                check_score = float(consensus_winner)
+                
+                # Determine colors STRICTLY based on Consensus Winner (Integer)
+                # Success Zone (Green for 5★ and 4★)
+                if check_score >= 4.0:
+                    h_bg, h_border, h_text = "#f0fdf4", "#16a34a", "#166534" # Strong Green
+                    if check_score == 5.0:
+                        result_label = "🏆 Elite Selection (5★ Verdict)"
+                    else:
+                        result_label = "⭐ Strong Selection (4★ Verdict)"
+                # Warning Zone (Amber for 3★)
+                elif check_score == 3.0:
+                    h_bg, h_border, h_text = "#fffbeb", "#f59e0b", "#92400e" # Balanced Amber
+                    result_label = "📊 Balanced (3★ Verdict)"
+                # Critical Zone (Red for 1★ and 2★)
                 else:
-                    h_bg, h_border, h_text = "#fef2f2", "#dc2626", "#991b1b" # Red Theme
+                    h_bg, h_border, h_text = "#fef2f2", "#ef4444", "#991b1b" # Warning Red
+                    result_label = f"⚠️ Warning ({int(check_score)}★ Verdict)"
                 
                 # Agreement Badge HTML
                 agreement_colors = {"High": "#16a34a", "Medium": "#d97706", "Low (Ambiguous)": "#dc2626"}
                 ag_color = agreement_colors.get(consensus_agreement, "#4b5563")
                 
-                # Consensus Meter Percentage (Scale 1-5 to 0-100)
-                meter_pct = round(((consensus_score - 1) / 4) * 100, 1)
+                # Consensus Meter Percentage (based on categorical winner)
+                meter_pct = round(((consensus_winner - 1) / 4) * 100, 1)
                 
-                # Calculate individual ticks for the progress bar (with hover labels)
-                ticks_html = ""
+                # Calculate individual model ticks (grouped by predicted star)
+                tick_groups = {}
                 for name, m in rating_models.items():
-                    # Calculate individual model score
-                    m_score = sum((i+1) * m.predict_proba(X_input)[0][i] for i in range(5))
-                    tick_pos = round(((m_score - 1) / 4) * 100, 1)
-                    # Add a vertical marker with a hover tooltip identifying the model using data attribute
-                    ticks_html += f'<div class="tick-marker" data-label="{name}: {m_score:.2f} ★" style="left: {tick_pos}%;"></div>'
+                    m_pred = int(m.predict(X_input)[0])
+                    tick_groups.setdefault(m_pred, []).append(name)
                 
-                # Pre-construct the Hero HTML to prevent F-string markdown confusion and collapse it to avoid parsing leaks
+                ticks_html = ""
+                for star, names in tick_groups.items():
+                    tick_pos = round(((star - 1) / 4) * 100, 1)
+                    label = " | ".join([f"{n}: {star} ★" for n in names])
+                    ticks_html += f'<div class="tick-marker" data-label="{label}" style="left: {tick_pos}%;"></div>'
+                
+                # Build tags HTML for Actionable Routing
                 sentiment_order = {"🟢": 0, "🔴": 1, "⚪": 2}
                 sorted_tags = sorted(
                     detected_tags,
                     key=lambda tag: (sentiment_order.get(tag[:1], 3), tag[2:].strip().lower()),
                 )
-                tags_html = "".join([f'<span class="sia-chip">{tag}</span>' for tag in sorted_tags])
-                stars_display = "&#11088;" * int(prediction) # Use HTML entity for Star
+                
+                tags_html_list = []
+                for tag in sorted_tags:
+                    if tag.startswith("🟢"):
+                        tags_html_list.append(f'<span class="sia-chip" style="color: #166534; background: #dcfce7; border-color: #86efac;">● {tag[2:].strip()}</span>')
+                    elif tag.startswith("🔴"):
+                        tags_html_list.append(f'<span class="sia-chip" style="color: #991b1b; background: #fee2e2; border-color: #fca5a5;">● {tag[2:].strip()}</span>')
+                    elif tag.startswith("⚪"):
+                        tags_html_list.append(f'<span class="sia-chip" style="color: #374151; background: #f3f4f6; border-color: #d1d5db;">● {tag[2:].strip()}</span>')
+                    else:
+                        tags_html_list.append(f'<span class="sia-chip">{tag}</span>')
+                tags_html = "".join(tags_html_list)
+
+                # Stars rendering
+                stars_display = render_star_rating(consensus_winner, h_border)
                 
                 raw_html = f"""
                 <div class="verdict-hero" style="background-color: {h_bg}; border-left-color: {h_border};">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                         <div>
-                            <div class="verdict-hero-title">AI Model Agreement Score</div>
-                            <div style="display: flex; align-items: baseline;">
-                                <span class="verdict-score-big" style="color: {h_text};">{consensus_score:.2f}</span>
-                                <span style="font-size: 1.5rem; font-weight: 700; color: {h_text}; opacity: 0.7; margin-right: 1.5rem;">/ 5</span>
-                                <div style="display: flex; flex-direction: column;">
-                                    <div style="font-size: 1.5rem; color: {h_text};">{stars_display}</div>
-                                </div>
+                            <span class="verdict-hero-title">MODEL CONSENSUS SCORE</span>
+                            <div style="display: flex; align-items: baseline; margin-top: 4px;">
+                                <span class="verdict-score-big" style="color: {h_text};">{int(consensus_winner)}.0</span>
+                                <span style="font-size: 1.5rem; font-weight: 700; color: {h_text}; opacity: 0.7;">/ 5</span>
                             </div>
                         </div>
-                        <div style="text-align: right;">
-                            <div class="verdict-hero-title">{selected_model_name} Confidence</div>
-                            <div style="font-size: 2.2rem; font-weight: 800; color: {h_text};">{max(probabilities):.1%}</div>
+                        <div style="display: flex; align-items: center; padding-top: 10px;">
+                            {stars_display}
                         </div>
                     </div>
-                    <div class="consensus-container">
-                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 700; color: #4b5563;">
-                            <span>HOW EACH MODEL VOTED</span>
+                    
+                    <div class="consensus-container" style="margin-top: 0.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; font-weight: 700; color: #4b5563; margin-bottom: 6px;">
+                            <span class="sia-tooltip-wrap" style="position: relative; display: inline-flex; align-items: center; cursor: help;">
+                                HOW EACH MODEL VOTED (COMMITTEE CLUSTERING)
+                                <svg style="margin-left: 6px; fill: #9ca3af; width: 14px; height: 14px;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z"/>
+                                </svg>
+                                <!-- The raw HTML pure CSS tooltip -->
+                                <div class="sia-popover" style="position: absolute; bottom: 135%; left: 50%; transform: translateX(-50%); background: #ffffff; color: #111827; border: 1px solid #e5e7eb; padding: 10px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 500; line-height: 1.4; width: 280px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05); pointer-events: none; z-index: 99999; visibility: hidden; opacity: 0; transition: opacity 0.2s ease, visibility 0.2s ease;">
+                                    White markers show each AI model's predicted star rating. The shaded bar indicates the consensus position.
+                                </div>
+                            </span>
                         </div>
                         <div class="consensus-track">
-                            <div class="consensus-fill" style="width: {meter_pct}%; background-color: {h_border};"></div>
+                            <div class="consensus-fill" style="width: {meter_pct}%; background-color: {h_border}; opacity: 0.3;"></div>
                             {ticks_html}
                         </div>
-                        <div style="font-size: 0.75rem; color: #6b7280; margin-top: 5px; font-style: italic;">
-                            The white markers indicate individual AI model "votes" across {len(models)} engines.
-                        </div>
+                    </div>
+                    <input type="checkbox" id="voting-toggle" style="display: none;">
+                    <label for="voting-toggle" style="display: block; margin-top: 12px; font-size: 0.75rem; font-weight: 600; color: {h_border}; cursor: pointer; text-align: center; padding: 6px; border: 1px dashed transparent; border-radius: 6px; opacity: 0.25; transition: all 0.2s;">
+                        How is the consensus score determined? (click to reveal)
+                    </label>
+                    <div class="voting-breakdown-panel">
+                        {voting_breakdown_html}
                     </div>
                 </div>
                 """
@@ -2034,8 +2324,16 @@ with tab_ml_predict:
                 verdict_html = "".join([line.strip() for line in raw_html.split("\n")])
                 
                 st.subheader(
-                    "🎯 AI Model Agreement Score",
-                    help="**AI Model Agreement Score:** The average sentiment rating predicted across all AI models (1-5 stars). A consensus score that blends multiple machine learning engines. **How Each Model Voted:** Individual predictions from each AI model shown as white markers on the progress bar. Hover over the markers to see each model's exact score. This helps you understand model confidence—if all markers align (high agreement), the prediction is more reliable."
+                    "🎯 MODEL CONSENSUS SCORE",
+                    help=(
+                        "**MODEL CONSENSUS SCORE:**\n"
+                        "The weighted consensus sentiment rating predicted across all AI models (1-5 stars). "
+                        "A consensus score that blends multiple machine learning engines.\n\n"
+                        "**How Each Model Voted:**\n"
+                        "Individual predictions from each AI model are shown as white markers on the progress bar. "
+                        "Hover over the markers to see each model's exact score.\n\n"
+                        "This helps you understand model confidence — if all markers align (high agreement), the prediction is highly reliable."
+                    )
                 )
                 st.markdown(verdict_html, unsafe_allow_html=True)
                 
@@ -2087,6 +2385,13 @@ with tab_ml_predict:
                             lambda row: f"{row['Percentage']:.0%} ({int(row['Count'])})",
                             axis=1,
                         )
+                        
+                        # Move takeaway to top (under header) per user request
+                        top_sent = sent_df.sort_values("Percentage", ascending=False).iloc[0]
+                        st.caption(
+                            f"Takeaway: {top_sent['Sentiment Label']} is most common at {top_sent['Percentage']:.0%} ({int(top_sent['Count'])})."
+                        )
+
                         sent_order = ["Positive feedback", "Neutral feedback", "Negative feedback"]
                         label_inside_threshold = 0.18
 
@@ -2126,11 +2431,6 @@ with tab_ml_predict:
                             )
                         )
                         st.altair_chart(sent_chart + sent_text_inside + sent_text_outside, use_container_width=True)
-
-                        top_sent = sent_df.sort_values("Percentage", ascending=False).iloc[0]
-                        st.caption(
-                            f"Takeaway: {top_sent['Sentiment Label']} is most common at {top_sent['Percentage']:.0%} ({int(top_sent['Count'])})."
-                        )
                 
                 with a_col2:
                     if aspect_dist:
@@ -2140,6 +2440,13 @@ with tab_ml_predict:
                         )
                         dist_df = pd.DataFrame(aspect_dist)
                         dist_df = dist_df.sort_values("Share (%)", ascending=False)
+                        
+                        # Move takeaway to top (under header) per user request
+                        top_driver = dist_df.iloc[0]
+                        st.caption(
+                            f"Takeaway: {top_driver['Topic']} is the top service driver at {top_driver['Share (%)']:.0%} ({int(top_driver['Count'])})."
+                        )
+
                         topic_order = dist_df["Topic"].tolist()
                         dist_df["Display"] = dist_df.apply(
                             lambda row: f"{row['Share (%)']:.0%} ({int(row['Count'])})",
@@ -2179,11 +2486,6 @@ with tab_ml_predict:
                         )
                         st.altair_chart(drivers_chart + drivers_text_inside + drivers_text_outside, use_container_width=True)
 
-                        top_driver = dist_df.iloc[0]
-                        st.caption(
-                            f"Takeaway: {top_driver['Topic']} is the top service driver at {top_driver['Share (%)']:.0%} ({int(top_driver['Count'])})."
-                        )
-
                 st.subheader(
                     "🎯 Actionable Routing Tags",
                     help="Recommended follow-up routing based on the detected issues and sentiment.",
@@ -2213,13 +2515,13 @@ with tab_ml_predict:
                             <div style='display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.45rem 0.5rem; padding: 0.15rem 0;'>
                                 <span style='font-size: 0.78rem; letter-spacing: 0.03em; font-weight: 700; color: #6b7280; text-transform: uppercase; margin-right: 0.15rem;'>Legend</span>
                                 <span title='Positive comments: the sentence expresses a favorable customer view.' style='display: inline-flex; align-items: center; gap: 0.25rem; background: #dcfce7; color: #166534; border: 1px solid #86efac; border-radius: 999px; padding: 0.24rem 0.62rem; font-size: 0.82rem; font-weight: 700;'>
-                                    <span aria-hidden='true'>🟢</span> Positive
+                                    <span aria-hidden='true'>●</span> Positive
                                 </span>
                                 <span title='Negative comments: the sentence describes dissatisfaction or issues.' style='display: inline-flex; align-items: center; gap: 0.25rem; background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; border-radius: 999px; padding: 0.24rem 0.62rem; font-size: 0.82rem; font-weight: 700;'>
-                                    <span aria-hidden='true'>🔴</span> Negative
+                                    <span aria-hidden='true'>●</span> Negative
                                 </span>
                                 <span title='Neutral comments: the sentence is factual or emotionally balanced.' style='display: inline-flex; align-items: center; gap: 0.25rem; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 999px; padding: 0.24rem 0.62rem; font-size: 0.82rem; font-weight: 700;'>
-                                    <span aria-hidden='true'>⚪</span> Neutral
+                                    <span aria-hidden='true'>●</span> Neutral
                                 </span>
                             </div>
                         </div>
