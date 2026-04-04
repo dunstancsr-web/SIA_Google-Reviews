@@ -2445,8 +2445,6 @@ with tab_explore:
 models = load_ml_models()
 
 with tab_ml_predict:
-    st.caption("Analyze a customer review to estimate star rating and identify the right team for follow-up.")
-    
     if not models:
         st.error("ML models not found. Please run `train_model.py` first.")
     else:
@@ -2756,16 +2754,158 @@ with tab_ml_predict:
             def _reset_analysis_state():
                 st.session_state["review_analyzed"] = False
 
+            # Custom CSS to make the Analyze Review button green when active
+            st.markdown("""
+                <style>
+                div[data-testid="stColumn"] button[kind="primary"] {
+                    background-color: #10b981 !important;
+                    border-color: #10b981 !important;
+                    color: white !important;
+                }
+                div[data-testid="stColumn"] button[kind="primary"]:hover {
+                    background-color: #059669 !important;
+                    border-color: #059669 !important;
+                }
+                /* Analysis Engine Reload button base styles (inherited by JS) */
+                .reload-yellow-pulse {
+                    height: 48px !important;
+                    min-width: 280px !important; /* Doubled width footprint */
+                    font-size: 2.1rem !important;
+                    background-color: #fef08a !important; 
+                    color: #854d0e !important;           
+                    border-color: #fde047 !important;
+                    font-weight: bold !important;
+                    transition: all 0.3s ease !important;
+                    display: flex !important;
+                    justify-content: center !important;
+                    align-items: center !important;
+                }
+                .reload-yellow-pulse:hover {
+                    background-color: #fde047 !important; 
+                    border-color: #eab308 !important;
+                    transform: scale(1.02);
+                }
+                </style>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<h3 style='margin-bottom: 0rem;'>Customer Review Text</h3>", unsafe_allow_html=True)
+            st.caption("Analyze a customer review to estimate star rating and identify the right team for follow-up.")
+            
             review_input = st.text_area(
                 "Customer Review Text",
+                label_visibility="collapsed",
                 height=140,
                 key="review_input_text",
-                placeholder="Paste or type one review, then click Analyze Review. e.g., The food was excellent but the flight was delayed by 3 hours...",
+                placeholder="Paste or type one review, then click Analyze Review ↑...",
                 on_change=_reset_analysis_state,
             )
 
-            st.markdown("**Try sample reviews**")
-            st.caption("Use a preset to quickly stress test negative, mixed, and positive scenarios.")
+            # 1. Primary Modifier - The AI Toggle logic moved up for row integration
+            selected_ai_backend = st.session_state.get("selected_ai_model", "auto")
+            groq_api_ready = bool(os.environ.get("GROQ_API_KEY", ""))
+
+            # Build dynamic help text with current status
+            _use_llm_current = st.session_state.get("_smart_ai_toggle", False)
+            if not _use_llm_current:
+                current_status = ":blue[●] Basic keyword detection (fastest, works offline)"
+            elif (selected_ai_backend == "groq" and groq_api_ready) or (selected_ai_backend == "auto" and groq_api_ready):
+                current_status = ":green[●] Smart AI active (Groq cloud)"
+            elif selected_ai_backend == "ollama" or (selected_ai_backend == "auto" and not groq_api_ready):
+                current_status = ":green[●] Smart AI active (local Ollama)"
+            else:
+                current_status = ":blue[●] Basic keyword detection (no AI service found)"
+
+            help_text = (
+                f"**Current mode:** {current_status}\n\n---\n\n"
+                "**When ON:** A cloud-based AI identifies specific topics in the review "
+                "(e.g., food quality, seat comfort) for richer, more nuanced analysis.\n\n"
+                "**When OFF:** Uses basic keyword detection only — fastest and works offline, but less nuanced."
+            )
+
+            col_toggle, col_spacer, col_btn = st.columns([1.8, 2, 1.2], gap="medium")
+            
+            with col_toggle:
+                use_llm = st.toggle(
+                    "Use Smart AI Analysis",
+                    value=False,
+                    key="_smart_ai_toggle",
+                    help=help_text,
+                )
+
+            with col_spacer:
+                # Empty spacer to maintain a clean, left-aligned professional look
+                pass
+
+            with col_btn:
+                is_ready = bool(st.session_state.get("review_input_text", "").strip())
+                is_analyzed = st.session_state.get("review_analyzed", False)
+                # Only "light up" green if there is text AND we haven't analyzed it yet
+                show_active = is_ready and not is_analyzed
+                if st.button("Analyze Review ↑", type="primary" if show_active else "secondary", use_container_width=True, key="main_analyze_btn"):
+                    st.session_state["review_analyzed"] = True
+                    st.rerun()
+
+            # --- INSTANT RESPONSE SCRIPT ---
+            # This JS monitors the textarea directly in the browser to "light up" the button 
+            # instantly without waiting for a Streamlit rerun.
+            st.components.v1.html(
+                """
+                <script>
+                const doc = window.parent.document;
+                
+                function updateButton() {
+                    const textArea = doc.querySelector('textarea[aria-label="Customer Review Text"]');
+                    const buttons = doc.querySelectorAll('button');
+                    const analyzeBtn = Array.from(buttons).find(b => b.innerText.includes('Analyze Review ↑'));
+                    const isAnalyzed = doc.getElementById('analysis-done-flag') !== null;
+                    
+                    if (textArea && analyzeBtn) {
+                        const hasText = textArea.value.trim().length > 0;
+                        if (hasText && !isAnalyzed) {
+                            analyzeBtn.style.backgroundColor = '#10b981';
+                            analyzeBtn.style.borderColor = '#10b981';
+                            analyzeBtn.style.color = 'white';
+                            analyzeBtn.style.fontWeight = 'bold';
+                        } else {
+                            analyzeBtn.style.backgroundColor = 'transparent';
+                            analyzeBtn.style.borderColor = 'rgba(49, 51, 63, 0.2)';
+                            analyzeBtn.style.color = 'rgb(49, 51, 63)';
+                            analyzeBtn.style.fontWeight = 'normal';
+                        }
+                    }
+                }
+
+                function styleReloadBtn() {
+                    const allBtns = doc.querySelectorAll('button');
+                    const reloadBtn = Array.from(allBtns).find(b => b.innerText.includes('↻'));
+                    if (reloadBtn && !reloadBtn.classList.contains('reload-yellow-pulse')) {
+                        reloadBtn.classList.add('reload-yellow-pulse');
+                    }
+                }
+
+                // Initial setup and observer
+                setTimeout(() => {
+                    updateButton();
+                    styleReloadBtn();
+                    
+                    const textArea = doc.querySelector('textarea[aria-label="Customer Review Text"]');
+                    if (textArea) {
+                        textArea.addEventListener('input', updateButton);
+                    }
+                    
+                    // Watch for results being added to the DOM (for the Reload button)
+                    const observer = new MutationObserver((mutations) => {
+                        styleReloadBtn();
+                        updateButton(); // Ensure analyze button stays in sync if DOM resets
+                    });
+                    
+                    observer.observe(doc.body, { childList: true, subtree: true });
+                }, 500);
+                </script>
+                """,
+                height=0,
+            )
+
 
             sample_reviews = {
                 "1_star": (
@@ -2811,22 +2951,25 @@ with tab_ml_predict:
                 ),
             }
 
-            preset_cols = st.columns([1, 1, 1])
+            preset_cols = st.columns([0.1, 1, 1, 1])
             with preset_cols[0]:
+                st.write("") # Spacing
+                st.caption("", help="**Try sample reviews:** Predict rating score and content category on a given sample review (negative / mixed / positive scenario)")
+            with preset_cols[1]:
                 st.button(
                     "1★ Severe service failure",
                     use_container_width=True,
                     on_click=_apply_sample_review,
                     args=(sample_reviews["1_star"],),
                 )
-            with preset_cols[1]:
+            with preset_cols[2]:
                 st.button(
                     "2.5★ Mixed experience",
                     use_container_width=True,
                     on_click=_apply_sample_review,
                     args=(sample_reviews["2_5_star"],),
                 )
-            with preset_cols[2]:
+            with preset_cols[3]:
                 st.button(
                     "5★ Excellent journey",
                     use_container_width=True,
@@ -2836,34 +2979,8 @@ with tab_ml_predict:
 
             st.write("") # Add a bit of spatial breathing room
 
-            # 1. Primary Modifier - The AI Toggle
-            selected_ai_backend = st.session_state.get("selected_ai_model", "auto")
-            groq_api_ready = bool(os.environ.get("GROQ_API_KEY", ""))
-
-            # Build dynamic help text with current status
-            _use_llm_current = st.session_state.get("_smart_ai_toggle", False)
-            if not _use_llm_current:
-                current_status = ":blue[●] Basic keyword detection (fastest, works offline)"
-            elif (selected_ai_backend == "groq" and groq_api_ready) or (selected_ai_backend == "auto" and groq_api_ready):
-                current_status = ":green[●] Smart AI active (Groq cloud)"
-            elif selected_ai_backend == "ollama" or (selected_ai_backend == "auto" and not groq_api_ready):
-                current_status = ":green[●] Smart AI active (local Ollama)"
-            else:
-                current_status = ":blue[●] Basic keyword detection (no AI service found)"
-
-            help_text = (
-                f"**Current mode:** {current_status}\n\n---\n\n"
-                "**When ON:** A cloud-based AI identifies specific topics in the review "
-                "(e.g., food quality, seat comfort) for richer, more nuanced analysis.\n\n"
-                "**When OFF:** Uses basic keyword detection only — fastest and works offline, but less nuanced."
-            )
-
-            use_llm = st.toggle(
-                "Use Smart AI Analysis",
-                value=False,
-                key="_smart_ai_toggle",
-                help=help_text,
-            )
+            # The AI Toggle is now moved to the top row next to the Analyze button for better UX.
+            pass
 
             model_dir = "models_b" if use_llm else "models"
             model_bundle = load_ml_models(model_dir=model_dir)
@@ -2879,13 +2996,13 @@ with tab_ml_predict:
             else:
                 selected_model_name = "None"
 
-            st.write("")
-            
-            # Run Action
-            if st.button("Analyze Review", type="primary", use_container_width=True):
-                st.session_state["review_analyzed"] = True
+            # The Run Action is now moved to the top next to the text area for better UX.
+            # Keeping a small spacer here for code structural consistency
+            pass
 
             if st.session_state.get("review_analyzed") and review_input.strip() and rating_models:
+                # Add a hidden flag for the JS to know analysis is visible
+                st.markdown('<div id="analysis-done-flag" style="display:none;"></div>', unsafe_allow_html=True)
                 with st.spinner("Analyzing review logic..."):
                     # 1. Topic & Sentiment Engine pass (The 'Routing Tags')
                     # This now also returns the unified global sentiment score if use_llm=True
@@ -3070,11 +3187,48 @@ with tab_ml_predict:
                 # detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta were populated above.
                 
                 st.divider()
-                st.caption("Results are organized from summary to detail. Start with the verdict card, then open optional detail sections as needed.")
+                # --- Analysis Engine Status (Moved to top center for maximum visibility) ---
+                engine_colors = {
+                    "Cloud": "#dbeafe",
+                    "Local LLM": "#dcfce7",
+                    "Local": "#f3f4f6",
+                }
+                engine_bg = engine_colors.get(analysis_meta.get("engine_tier"), "#f3f4f6")
+                status_color = "#166534" if analysis_meta.get("llm_used") else "#374151"
+                
+                # Use 3 columns: 1st: Badge (Narrowed), 2nd: Reload button, 3rd: Expanded Spacer (2x)
+                st_cols_engine = st.columns([3, 1.5, 2], gap="small")
+                with st_cols_engine[0]:
+                    st.markdown(
+                        f"""
+                        <div style="border:1px solid #e5e7eb; border-radius:10px; height:48px; padding:0.1rem 1rem; display:flex; align-items:center; background:#ffffff; width: fit-content;">
+                            <div style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center;">
+                                <span style="font-size:1.0rem; font-weight:700; letter-spacing:0.02em; color:#6b7280; text-transform:uppercase;">Analysis engine</span>
+                                <span style="background:{engine_bg}; color:#111827; border:1px solid #d1d5db; border-radius:999px; padding:0.2rem 0.6rem; font-size:1.05rem; font-weight:700;">{analysis_meta.get('engine_label', 'Standard ML + VADER')}</span>
+                                <span style="font-size:1.08rem; color:{status_color}; font-weight:600;">{analysis_meta.get('status', '')}</span>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                
+                # Only show the reload button in the 2nd column if we are in a fallback (failed LLM) state
+                with st_cols_engine[1]:
+                    if is_ai_fallback:
+                        if st.button("↻ Reload", key="reload_ai_service", help="Attempt to reconnect to the AI service (Groq/Ollama)", use_container_width=False):
+                            st.rerun()
+                    else:
+                        pass # Keep blank if no fallback
+
+                with st_cols_engine[2]:
+                    # Blank spacer
+                    pass
+                
+                st.write("") # Added vertical breathing room
                 
                 # --- 0. MULTI-MODEL TOURNAMENT SUMMARY ---
-                st.subheader("🧬 Model Tournament Consensus", help="**How is this calculated?** During training, we use an 80/20 split. **Train Accuracy:** How well the model learned the historical data. **Test Accuracy:** How well it handles brand new data. We use the Test Accuracy as the 'Expert Weight' for the final star consensus.")
-                with st.expander("Consensus Ledger & Stability Audit", expanded=False):
+                st.subheader("🎯 Model Reliability & Accuracy", help="**How is this calculated?** We test our AI engines against real historical reviews to see how accurately they can 'guess' a customer's star rating. The **Expert Weight** indicates which model is currently the most reliable; the more accurate a model is, the more influence it has on the final consensus score.")
+                with st.expander("📊 View Individual Model Scores & Weights", expanded=False):
                     st.table(all_results)
                     st.info("**What do these columns mean?**\n- **Train Accuracy:** The AI's performance on the 'study guide' (data it saw during training).\n- **Test Accuracy (Benchmark):** The performance on the 'final exam' (brand new data). We use this as the model's 'Expert Weight.'\n- **In-Text Confidence:** How sure the AI is about *this particular review* right now.\n- **Rating Logic:** A probability-weighted formula: $(1 \\times P_{1★}) + (2 \\times P_{2★}) + (3 \\times P_{3★}) + (4 \\times P_{4★}) + (5 \\times P_{5★})$. This explains the 'continuum' of sentiment even if a model picks a single winner.")
                 st.write("")
@@ -3145,7 +3299,7 @@ with tab_ml_predict:
                 <div class="verdict-hero" style="background-color: {h_bg}; border-left-color: {h_border};">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                         <div>
-                            <span class="verdict-hero-title">MODEL CONSENSUS SCORE</span>
+                            <span class="verdict-hero-title">AI Predicted Rating</span>
                             <div style="display: flex; align-items: baseline; margin-top: 4px;">
                                 <span class="verdict-score-big" style="color: {h_text};">{int(consensus_winner)}.0</span>
                                 <span style="font-size: 1.5rem; font-weight: 700; color: {h_text}; opacity: 0.7;">/ 5</span>
@@ -3185,11 +3339,11 @@ with tab_ml_predict:
                 """
                 # The 'Nuclear' Fix: Remove all newlines and indentation to force the browser to treat it as one continuous HTML block
                 verdict_html = "".join([line.strip() for line in raw_html.split("\n")])
-                
+
                 st.subheader(
-                    "🎯 MODEL CONSENSUS SCORE",
+                    "🎯 AI Predicted Rating",
                     help=(
-                        "**MODEL CONSENSUS SCORE:**\n"
+                        "**AI Predicted Rating:**\n"
                         "The weighted consensus sentiment rating predicted across all AI models (1-5 stars). "
                         "A consensus score that blends multiple machine learning engines.\n\n"
                         "**How Each Model Voted:**\n"
@@ -3199,39 +3353,14 @@ with tab_ml_predict:
                     )
                 )
                 st.markdown(verdict_html, unsafe_allow_html=True)
-                
-                if consensus_agreement == "Low (Ambiguous)":
-                    st.warning("⚠️ **Model Divergence Detected:** The AI engines are in strong disagreement. This review should be flagged for a manual administrative audit.", icon="🧐")
-                    col_btn1, col_btn2 = st.columns([1, 4])
-                    with col_btn1:
-                        if st.button("Request Human Review", type="primary", use_container_width=True):
-                            st.toast("✅ Review successfully flagged and sent to admin queue.")
+                st.write("")
                 
                 st.write("")
                 
-                # --- 2. ANALYTICAL BREAKDOWN (THE 'WHY') ---
+                # Header of Analytical Breakdown
                 st.subheader(
                     "📊 Analytical Breakdown",
                     help="Use this section for deeper context on sentiment and service-driver distribution.",
-                )
-                engine_colors = {
-                    "Cloud": "#dbeafe",
-                    "Local LLM": "#dcfce7",
-                    "Local": "#f3f4f6",
-                }
-                engine_bg = engine_colors.get(analysis_meta.get("engine_tier"), "#f3f4f6")
-                status_color = "#166534" if analysis_meta.get("llm_used") else "#374151"
-                st.markdown(
-                    f"""
-                    <div style="border:1px solid #e5e7eb; border-radius:10px; padding:0.8rem 1rem; margin-bottom:0.9rem; background:#ffffff;">
-                        <div style="display:flex; flex-wrap:wrap; gap:0.55rem; align-items:center;">
-                            <span style="font-size:0.75rem; font-weight:700; letter-spacing:0.02em; color:#6b7280; text-transform:uppercase;">Analysis engine</span>
-                            <span style="background:{engine_bg}; color:#111827; border:1px solid #d1d5db; border-radius:999px; padding:0.2rem 0.6rem; font-size:0.8rem; font-weight:700;">{analysis_meta.get('engine_label', 'Standard ML + VADER')}</span>
-                            <span style="font-size:0.82rem; color:{status_color}; font-weight:600;">{analysis_meta.get('status', '')}</span>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
                 )
                 a_col1, a_col2 = st.columns([1, 1])
                 
