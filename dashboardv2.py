@@ -2822,7 +2822,7 @@ with tab_ml_predict:
                 "**When OFF:** Uses basic keyword detection only — fastest and works offline, but less nuanced."
             )
 
-            col_toggle, col_spacer, col_btn = st.columns([1.8, 2, 1.2], gap="medium")
+            col_toggle, col_spacer, col_btn = st.columns([1.8, 1.4, 1.8], gap="medium")
             
             with col_toggle:
                 use_llm = st.toggle(
@@ -3341,7 +3341,7 @@ with tab_ml_predict:
                 verdict_html = "".join([line.strip() for line in raw_html.split("\n")])
 
                 st.subheader(
-                    "🎯 AI Predicted Rating",
+                    "✨ AI Predicted Rating",
                     help=(
                         "**AI Predicted Rating:**\n"
                         "The weighted consensus sentiment rating predicted across all AI models (1-5 stars). "
@@ -3523,6 +3523,12 @@ with tab_ml_predict:
                         )
                         st.altair_chart(drivers_chart + drivers_text_inside + drivers_text_outside, use_container_width=True)
 
+
+                
+                # --- 3. EVIDENCE LAYER (DEEP DIVE) ---
+                st.divider()
+                
+                # Move the Actionable Routing Tags to be under the divider
                 st.subheader(
                     "🎯 Actionable Routing Tags",
                     help="Recommended follow-up routing based on the detected issues and sentiment.",
@@ -3531,8 +3537,6 @@ with tab_ml_predict:
                 
                 st.write("")
                 
-                # --- 3. EVIDENCE LAYER (DEEP DIVE) ---
-                st.divider()
                 with st.expander("🔍 Evidence Deep-Dive: Annotated Context", expanded=True):
                     # Added max-height and overflow-y: auto to handle 10,000+ word reviews without breaking UI
                     st.markdown(
