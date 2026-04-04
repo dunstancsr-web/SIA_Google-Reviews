@@ -1392,59 +1392,328 @@ with tab_overview:
         st.altair_chart(rating_trend_chart, use_container_width=True)
 
     st.subheader("Ratings & sentiment")
-    st.caption("See how reviews are distributed across ratings and overall sentiment breakdown.")
+
     dist_cols = st.columns(2)
 
     with dist_cols[0]:
         rating_counts = (
             filtered.groupby("rating", dropna=True)
-            .size()
-            .reset_index(name="count")
-            .sort_values("rating")
+            .agg({"text_length": ["count", "mean", "median"]})
+            .reset_index()
         )
-        rating_chart = (
+        rating_counts.columns = ["rating", "count", "avg_length", "median_length"]
+        rating_counts = rating_counts.sort_values("rating")
+        # Use sentiment colors for 1-5 stars
+        rating_counts["color"] = rating_counts["rating"].apply(
+            lambda x: "#ef4444" if x <= 2 else ("#9ca3af" if x == 3 else "#10b981")
+        )
+        rating_counts["Display"] = rating_counts["count"].apply(lambda d: f"{int(d)}")
+        
+        # Determine height-based threshold for 'inside vs outside' annotations
+        max_v = rating_counts["count"].max() if not rating_counts.empty else 1
+        label_threshold = max_v * 0.15
+
+        rating_base = (
             alt.Chart(rating_counts)
-            .mark_bar(color="#1f77b4")
+            .mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5)
             .encode(
-                x=alt.X("rating:O", title="Rating", axis=alt.Axis(labelAngle=0)),
+                x=alt.X("rating:O", title="Star Rating", axis=alt.Axis(labelAngle=0)),
                 y=alt.Y("count:Q", title="Reviews"),
-                tooltip=["rating:O", "count:Q"],
+                color=alt.Color("color:N", scale=None),
+                tooltip=[
+                    alt.Tooltip("rating:O", title="Rating"),
+                    alt.Tooltip("count:Q", title="Reviews", format=","),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
             )
-            .properties(height=280)
+            .properties(height=300, title=alt.TitleParams(text="# of reviews distributed across ratings", anchor='middle'))
         )
-        st.altair_chart(rating_chart, use_container_width=True)
+
+        rating_text_inside_halo = (
+            alt.Chart(rating_counts)
+            .transform_filter(f"datum.count >= {label_threshold}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="black", dy=15, fontSize=13, stroke="black", strokeWidth=4, strokeOpacity=0.5)
+            .encode(
+                x=alt.X("rating:O"),
+                y=alt.Y("count:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    alt.Tooltip("rating:O", title="Rating"),
+                    alt.Tooltip("count:Q", title="Reviews", format=","),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+        rating_text_inside = (
+            alt.Chart(rating_counts)
+            .transform_filter(f"datum.count >= {label_threshold}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", dy=15, fontSize=13)
+            .encode(
+                x=alt.X("rating:O"),
+                y=alt.Y("count:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    alt.Tooltip("rating:O", title="Rating"),
+                    alt.Tooltip("count:Q", title="Reviews", format=","),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+
+        rating_text_outside = (
+            alt.Chart(rating_counts)
+            .transform_filter(f"datum.count < {label_threshold}")
+            .mark_text(align="center", baseline="bottom", dy=-10, fontWeight=600, color="#374151", fontSize=13)
+            .encode(
+                x=alt.X("rating:O"),
+                y=alt.Y("count:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    alt.Tooltip("rating:O", title="Rating"),
+                    alt.Tooltip("count:Q", title="Reviews", format=","),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+
+        st.altair_chart(rating_base + rating_text_inside_halo + rating_text_inside + rating_text_outside, use_container_width=True)
 
     with dist_cols[1]:
+        pos_f = filtered[filtered["llm_sentiment_score"] > 0.05]
+        neu_f = filtered[filtered["llm_sentiment_score"].between(-0.05, 0.05)]
+        neg_f = filtered[filtered["llm_sentiment_score"] < -0.05]
+
         sentiment_df = pd.DataFrame(
             {
-                "Sentiment": ["Positive (4-5)", "Neutral (3)", "Negative (1-2)"],
-                "Count": [
-                    filtered["rating"].between(4, 5).sum(),
-                    filtered["rating"].eq(3).sum(),
-                    filtered["rating"].between(1, 2).sum(),
-                ],
+                "Sentiment": ["Positive", "Neutral", "Negative"],
+                "Count": [pos_f.shape[0], neu_f.shape[0], neg_f.shape[0]],
+                "avg_length": [pos_f["text_length"].mean(), neu_f["text_length"].mean(), neg_f["text_length"].mean()],
+                "median_length": [pos_f["text_length"].median(), neu_f["text_length"].median(), neg_f["text_length"].median()],
             }
+        ).fillna(0)
+        total_s = sentiment_df["Count"].sum()
+        sentiment_df["Percent"] = (sentiment_df["Count"] / total_s).fillna(0)
+        sentiment_df["Display"] = sentiment_df.apply(
+            lambda row: f"{row['Percent']:.0%} ({int(row['Count'])})",
+            axis=1,
         )
-        sentiment_df["Percent"] = (sentiment_df["Count"] / sentiment_df["Count"].sum()).fillna(0)
 
-        sentiment_chart = (
+        sent_order = ["Positive", "Neutral", "Negative"]
+        label_threshold = 0.18
+
+        base_sent_chart = (
             alt.Chart(sentiment_df)
-            .mark_arc(innerRadius=60)
+            .mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5)
             .encode(
-                theta=alt.Theta("Count:Q"),
+                x=alt.X("Sentiment:N", title=None, sort=sent_order, axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("Percent:Q", axis=alt.Axis(format=".0%", title="Share")),
                 color=alt.Color(
                     "Sentiment:N",
-                    scale=alt.Scale(range=["#2ca02c", "#ffbf00", "#d62728"]),
+                    scale=alt.Scale(
+                        domain=["Positive", "Neutral", "Negative"],
+                        range=["#10b981", "#9ca3af", "#ef4444"]
+                    ),
+                    legend=None
                 ),
                 tooltip=[
                     "Sentiment:N",
-                    alt.Tooltip("Count:Q", title="Reviews"),
+                    alt.Tooltip("Count:Q", title="Reviews", format=","),
                     alt.Tooltip("Percent:Q", title="Share", format=".1%"),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
                 ],
             )
-            .properties(height=280)
+            .properties(height=300, title=alt.TitleParams(text="Overall sentiment share %", anchor='middle'))
         )
-        st.altair_chart(sentiment_chart, use_container_width=True)
+
+        sent_text_inside_halo = (
+            alt.Chart(sentiment_df)
+            .transform_filter(f"datum.Percent >= {label_threshold}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="black", dy=15, fontSize=13, stroke="black", strokeWidth=4, strokeOpacity=0.5)
+            .encode(
+                x=alt.X("Sentiment:N", sort=sent_order),
+                y=alt.Y("Percent:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    "Sentiment:N",
+                    alt.Tooltip("Count:Q", title="Reviews", format=","),
+                    alt.Tooltip("Percent:Q", title="Share", format=".1%"),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+        sent_text_inside = (
+            alt.Chart(sentiment_df)
+            .transform_filter(f"datum.Percent >= {label_threshold}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", dy=15, fontSize=13)
+            .encode(
+                x=alt.X("Sentiment:N", sort=sent_order),
+                y=alt.Y("Percent:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    "Sentiment:N",
+                    alt.Tooltip("Count:Q", title="Reviews", format=","),
+                    alt.Tooltip("Percent:Q", title="Share", format=".1%"),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+
+        sent_text_outside = (
+            alt.Chart(sentiment_df)
+            .transform_filter(f"datum.Percent < {label_threshold}")
+            .mark_text(align="center", baseline="bottom", dy=-10, fontWeight=600, color="#374151", fontSize=13)
+            .encode(
+                x=alt.X("Sentiment:N", sort=sent_order),
+                y=alt.Y("Percent:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    "Sentiment:N",
+                    alt.Tooltip("Count:Q", title="Reviews", format=","),
+                    alt.Tooltip("Percent:Q", title="Share", format=".1%"),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+
+        st.altair_chart(base_sent_chart + sent_text_inside_halo + sent_text_inside + sent_text_outside, use_container_width=True)
+        # Center the caption within the Sentiment column
+        _, cap_row_col, _ = st.columns([1, 8, 1])
+        with cap_row_col:
+            st.caption("ℹ️ How does the AI 'read' the mood (sentiment)?", help=(
+                "**What is this?**\n"
+                "Instead of just looking at the 1-5 stars, our AI reads every single word the passenger wrote to understand their **true feelings**.\n\n"
+                "**Data Source Mapping:**\n"
+                "- Feature: `llm_sentiment_score` (-1.0 to 1.0)\n\n"
+                "**AI Grouping Thresholds:**\n"
+                "- 🟢 **Positive:** `llm_sentiment_score` > +0.05\n"
+                "- ⚪ **Neutral:** between -0.05 and +0.05\n"
+                "- 🔴 **Negative:** `llm_sentiment_score` < -0.05\n\n"
+                "**The Secret:** Often, a passenger leaves 5 stars but writes a complaining review. This chart catches those 'hidden' emotions that star ratings miss!"
+            ))
+
+    # --- MIGRATED CHART: ENGAGEMENT ANALYSIS (REVIEW EFFORT) ---
+    # Collapsed by default to maintain executive density
+    with st.expander("Show More", expanded=False):
+        # Visualization Toggle: Summary vs Distribution
+        eng_mode = st.radio(
+            "Engagement View Mode",
+            ["Summary (Average)", "Full Distribution (Boxplot)"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="eng_toggle_executive"
+        )
+        st.write("")
+
+        if eng_mode == "Summary (Average)":
+            # Calculate average text length for each star rating
+            engagement_data = (
+                filtered.groupby("rating")["text_length"]
+                .agg(["mean", "median"])
+                .reset_index()
+            )
+            engagement_data.columns = ["rating", "avg_length", "median_length"]
+            engagement_data["Display"] = engagement_data["avg_length"].apply(lambda x: f"{int(x)} chars")
+            
+            # Tooltip and Annotation logic sync with established patterns
+            eng_base = (
+                alt.Chart(engagement_data)
+                .mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5)
+                .encode(
+                    x=alt.X("rating:O", title="Star Rating", axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("avg_length:Q", title="Avg. text_length", axis=alt.Axis(format="d")),
+                    color=alt.Color(
+                        "rating:O",
+                        scale=alt.Scale(
+                            domain=[1, 2, 3, 4, 5],
+                            range=["#ef4444", "#ef4444", "#9ca3af", "#10b981", "#10b981"]
+                        ),
+                        legend=None
+                    ),
+                    tooltip=[
+                        alt.Tooltip("rating:O", title="Rating"),
+                        alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                        alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                    ]
+                )
+                .properties(height=350, title=alt.TitleParams(text="Average text_length by Rating", anchor='middle', fontSize=16, fontWeight=600))
+            )
+
+            eng_text_inside_halo = (
+                alt.Chart(engagement_data)
+                .mark_text(align="center", baseline="middle", fontWeight=700, color="black", dy=15, fontSize=13, stroke="black", strokeWidth=4, strokeOpacity=0.5)
+                .encode(
+                    x=alt.X("rating:O"),
+                    y=alt.Y("avg_length:Q"),
+                    text=alt.Text("Display:N"),
+                )
+            )
+
+            eng_text_inside = (
+                alt.Chart(engagement_data)
+                .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", dy=15, fontSize=13)
+                .encode(
+                    x=alt.X("rating:O"),
+                    y=alt.Y("avg_length:Q"),
+                    text=alt.Text("Display:N"),
+                )
+            )
+
+            st.altair_chart(eng_base + eng_text_inside_halo + eng_text_inside, use_container_width=True)
+        else:
+            # Full Distribution mode: Enhanced Box Plot with Rating-Adaptive Colors
+            eng_base = (
+                alt.Chart(filtered)
+                .mark_boxplot(extent='min-max', size=60, opacity=0.8) 
+                .encode(
+                    x=alt.X("rating:O", title="Star Rating", axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("text_length:Q", title="text_length"),
+                    color=alt.Color(
+                        "rating:O",
+                        scale=alt.Scale(
+                            domain=[1, 2, 3, 4, 5],
+                            range=["#ef4444", "#ef4444", "#9ca3af", "#10b981", "#10b981"]
+                        ),
+                        legend=None
+                    ),
+                    tooltip=[
+                        alt.Tooltip("rating:O", title="Rating"),
+                        alt.Tooltip("min(text_length):Q", title="Min Length", format=".0f"),
+                        alt.Tooltip("q1(text_length):Q", title="Q1 (25th)", format=".0f"),
+                        alt.Tooltip("median(text_length):Q", title="Median Length", format=".0f"),
+                        alt.Tooltip("q3(text_length):Q", title="Q3 (75th)", format=".0f"),
+                        alt.Tooltip("max(text_length):Q", title="Max Length", format=".0f"),
+                    ]
+                )
+                .properties(height=350, title=alt.TitleParams(text="Review text_length Distribution (boxplot)", anchor='middle', fontSize=16, fontWeight=600))
+            )
+            
+            # Consistent interaction overlay
+            eng_overlay = (
+                alt.Chart(filtered)
+                .mark_bar(opacity=0)
+                .encode(
+                    x=alt.X("rating:O"),
+                    y=alt.Y("text_length:Q", aggregate="median"),
+                    tooltip=[
+                        alt.Tooltip("rating:O", title="Rating"),
+                        alt.Tooltip("min(text_length):Q", title="Min Length", format=".0f"),
+                        alt.Tooltip("q1(text_length):Q", title="Q1 (25th)", format=".0f"),
+                        alt.Tooltip("median(text_length):Q", title="Median Length", format=".0f"),
+                        alt.Tooltip("q3(text_length):Q", title="Q3 (75th)", format=".0f"),
+                        alt.Tooltip("max(text_length):Q", title="Max Length", format=".0f"),
+                    ]
+                )
+            )
+            
+            st.altair_chart(eng_base + eng_overlay, use_container_width=True)
 
     st.subheader("Where reviews come from")
     st.caption("Compare review volume and average ratings across different platforms.")
@@ -1453,41 +1722,270 @@ with tab_overview:
     with platform_cols[0]:
         platform_volume = (
             filtered.groupby("published_platform", dropna=True)
-            .size()
-            .reset_index(name="value")
-            .sort_values("value", ascending=False)
+            .agg({"rating": "count", "text_length": ["mean", "median"]})
+            .reset_index()
         )
-        platform_volume_chart = (
+        platform_volume.columns = ["published_platform", "value", "avg_length", "median_length"]
+        platform_volume = platform_volume.sort_values("value", ascending=False)
+        # Calculate Share (%)
+        total_p = platform_volume["value"].sum()
+        platform_volume["share"] = (platform_volume["value"] / total_p).fillna(0)
+        platform_volume["Display"] = platform_volume.apply(
+            lambda row: f"{int(row['value'])} ({row['share']:.0%})", axis=1
+        )
+        
+        # UI/UX: Determine threshold for annotations
+        max_v = platform_volume["value"].max() if not platform_volume.empty else 1
+        label_threshold = max_v * 0.15
+
+        platform_volume_base = (
             alt.Chart(platform_volume)
-            .mark_bar(color="#9467bd")
+            .mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5)
             .encode(
-                x=alt.X("value:Q", title="Reviews"),
-                y=alt.Y("published_platform:N", title=None, sort="-x"),
-                tooltip=["published_platform:N", "value:Q"],
+                x=alt.X("published_platform:N", title=None, axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("value:Q", title="Reviews"),
+                color=alt.Color(
+                    "published_platform:N",
+                    scale=alt.Scale(
+                        domain=["Desktop", "Mobile"],
+                        range=["#0066CC", "#30B0C7"] # Blue and Teal
+                    ),
+                    legend=None
+                ),
+                tooltip=[
+                    "published_platform:N", 
+                    alt.Tooltip("value:Q", title="Reviews", format=","),
+                    alt.Tooltip("share:Q", title="Share (%)", format=".1%"),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
             )
-            .properties(height=280)
+            .properties(
+                height=300, 
+                title=alt.TitleParams(text="Review Count by Platform", anchor='middle')
+            )
         )
-        st.altair_chart(platform_volume_chart, use_container_width=True)
+
+        vol_text_inside_halo = (
+            alt.Chart(platform_volume)
+            .transform_filter(f"datum.value >= {label_threshold}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="black", dy=15, fontSize=13, stroke="black", strokeWidth=4, strokeOpacity=0.5)
+            .encode(
+                x=alt.X("published_platform:N"),
+                y=alt.Y("value:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    "published_platform:N", 
+                    alt.Tooltip("value:Q", title="Reviews", format=","),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+        vol_text_inside = (
+            alt.Chart(platform_volume)
+            .transform_filter(f"datum.value >= {label_threshold}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", dy=15, fontSize=13)
+            .encode(
+                x=alt.X("published_platform:N"),
+                y=alt.Y("value:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    "published_platform:N", 
+                    alt.Tooltip("value:Q", title="Reviews", format=","),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+
+        vol_text_outside = (
+            alt.Chart(platform_volume)
+            .transform_filter(f"datum.value < {label_threshold}")
+            .mark_text(align="center", baseline="bottom", dy=-10, fontWeight=600, color="#374151", fontSize=13)
+            .encode(
+                x=alt.X("published_platform:N"),
+                y=alt.Y("value:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    "published_platform:N", 
+                    alt.Tooltip("value:Q", title="Reviews", format=","),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+
+        st.altair_chart(platform_volume_base + vol_text_inside_halo + vol_text_inside + vol_text_outside, use_container_width=True)
 
     with platform_cols[1]:
         platform_avg = (
-            filtered.groupby("published_platform", dropna=True)["rating"]
-            .mean()
-            .reset_index(name="value")
-            .sort_values("value", ascending=False)
+            filtered.groupby("published_platform", dropna=True)
+            .agg({"rating": "mean", "text_length": ["mean", "median"]})
+            .reset_index()
         )
-        platform_avg_chart = (
-            alt.Chart(platform_avg)
-            .mark_bar(color="#2ca02c")
-            .encode(
-                x=alt.X("value:Q", title="Average rating", scale=alt.Scale(domain=[0, 5])),
-                y=alt.Y("published_platform:N", title=None, sort="-x"),
-                tooltip=["published_platform:N", alt.Tooltip("value:Q", format=".2f")],
-            )
-            .properties(height=280)
-        )
-        st.altair_chart(platform_avg_chart, use_container_width=True)
+        platform_avg.columns = ["published_platform", "value", "avg_length", "median_length"]
+        platform_avg = platform_avg.sort_values("value", ascending=False)
+        
+        # Determine labels for display
+        platform_avg["Display"] = platform_avg["value"].apply(lambda v: f"{v:.2f}")
+        
+        # Rating scale is always 1-5, so threshold is constant (e.g., 0.8)
+        label_threshold_avg = 0.8
 
+        platform_avg_base = (
+            alt.Chart(platform_avg)
+            .mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5)
+            .encode(
+                x=alt.X("published_platform:N", title=None, axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("value:Q", title="Average Rating", scale=alt.Scale(domain=[0, 5])),
+                color=alt.Color(
+                    "published_platform:N",
+                    scale=alt.Scale(
+                        domain=["Desktop", "Mobile"],
+                        range=["#0066CC", "#30B0C7"] # Blue and Teal
+                    ),
+                    legend=None
+                ),
+                tooltip=[
+                    "published_platform:N", 
+                    alt.Tooltip("value:Q", title="Avg Rating", format=".2f"),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+            .properties(
+                height=300,
+                title=alt.TitleParams(text="Average Rating by Platform", anchor='middle')
+            )
+        )
+
+        avg_text_inside_halo = (
+            alt.Chart(platform_avg)
+            .transform_filter(f"datum.value >= {label_threshold_avg}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="black", dy=15, fontSize=13, stroke="black", strokeWidth=4, strokeOpacity=0.5)
+            .encode(
+                x=alt.X("published_platform:N"),
+                y=alt.Y("value:Q"),
+                text=alt.Text("Display:N"),
+                tooltip=[
+                    "published_platform:N", 
+                    alt.Tooltip("value:Q", title="Avg Rating", format=".2f"),
+                    alt.Tooltip("avg_length:Q", title="Avg. text_length", format=".0f"),
+                    alt.Tooltip("median_length:Q", title="Median text_length", format=".0f"),
+                ],
+            )
+        )
+        avg_text_inside = (
+            alt.Chart(platform_avg)
+            .transform_filter(f"datum.value >= {label_threshold_avg}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", dy=15, fontSize=13)
+            .encode(
+                x=alt.X("published_platform:N"),
+                y=alt.Y("value:Q"),
+                text=alt.Text("Display:N"),
+            )
+        )
+
+        avg_text_outside = (
+            alt.Chart(platform_avg)
+            .transform_filter(f"datum.value < {label_threshold_avg}")
+            .mark_text(align="center", baseline="bottom", dy=-10, fontWeight=600, color="#374151", fontSize=13)
+            .encode(
+                x=alt.X("published_platform:N"),
+                y=alt.Y("value:Q"),
+                text=alt.Text("Display:N"),
+            )
+        )
+
+        st.altair_chart(platform_avg_base + avg_text_inside_halo + avg_text_inside + avg_text_outside, use_container_width=True)
+
+    # --- MIGRATED CHART: DEVICE BY RATING ---
+    # Collapsed by default to maintain executive density
+    with st.expander("Show More", expanded=False):
+        device_data = (
+            filtered[filtered["published_platform"].isin(["Desktop", "Mobile"])]
+            .groupby(["rating", "published_platform"])
+            .size()
+            .reset_index(name="count")
+        )
+        
+        if not device_data.empty:
+            # Calculate share per rating bucket
+            device_data["share"] = device_data.groupby("rating")["count"].transform(lambda x: x / x.sum())
+            # Display label: "Count (Share%)"
+            device_data["Display"] = device_data.apply(
+                lambda row: f"{int(row['count'])} ({row['share']:.0%})", axis=1
+            )
+            
+            # Visibility Threshold for stacked labels
+            label_visibility_threshold = 0.08
+
+            # Base Bar Layer
+            device_bars = (
+                alt.Chart(device_data)
+                .mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5)
+                .encode(
+                    x=alt.X("rating:O", title="Star Rating", axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("count:Q", title="Number of Reviews", stack="zero"),
+                    color=alt.Color(
+                        "published_platform:N",
+                        title="Device Source",
+                        scale=alt.Scale(
+                            domain=["Desktop", "Mobile"],
+                            range=["#0066CC", "#30B0C7"] # Blue and Teal
+                        ),
+                        legend=alt.Legend(orient="bottom", titleFontSize=12, labelFontSize=11)
+                    ),
+                    tooltip=[
+                        alt.Tooltip("rating:O", title="Rating"),
+                        alt.Tooltip("published_platform:N", title="Device"),
+                        alt.Tooltip("count:Q", title="Reviews", format=","),
+                        alt.Tooltip("share:Q", title="Share (%)", format=".1%"),
+                    ],
+                )
+                .properties(height=350, title=alt.TitleParams(text="Review Composition by Device Type", anchor='middle', fontSize=16, fontWeight=600))
+            )
+
+            # Stacked Labels inside haloes
+            device_labels_halo = (
+                alt.Chart(device_data)
+                .transform_filter(f"datum.share >= {label_visibility_threshold}")
+                .mark_text(align="center", baseline="middle", fontWeight=700, color="black", dy=0, fontSize=11, stroke="black", strokeWidth=4, strokeOpacity=0.5)
+                .encode(
+                    x=alt.X("rating:O"),
+                    y=alt.Y("count:Q", stack="zero"),
+                    text=alt.Text("Display:N"),
+                    tooltip=[
+                        alt.Tooltip("rating:O", title="Rating"),
+                        alt.Tooltip("published_platform:N", title="Device"),
+                        alt.Tooltip("count:Q", title="Reviews", format=","),
+                        alt.Tooltip("share:Q", title="Share (%)", format=".1%"),
+                    ]
+                )
+            )
+
+            # High-visibility text labels
+            device_labels = (
+                alt.Chart(device_data)
+                .transform_filter(f"datum.share >= {label_visibility_threshold}")
+                .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", dy=0, fontSize=11)
+                .encode(
+                    x=alt.X("rating:O"),
+                    y=alt.Y("count:Q", stack="zero"),
+                    text=alt.Text("Display:N"),
+                )
+            )
+
+            st.altair_chart(device_bars + device_labels_halo + device_labels, use_container_width=True)
+        else:
+            st.info("No Desktop/Mobile device data available.")
+
+
+    # --- NEW CHART: ENGAGEMENT ANALYSIS (REVIEW DEPTH) ---
+    
+
+    st.write("")
     with st.expander("📝 Text Insights", expanded=False):
         st.subheader("Text length vs rating")
         st.caption("Explore if longer reviews tend to receive higher or lower ratings.")
@@ -2100,7 +2598,7 @@ with tab_ml_predict:
 
             def _apply_sample_review(text: str):
                 st.session_state["review_input_text"] = text
-                st.session_state["review_analyzed"] = False
+                st.session_state["review_analyzed"] = True
 
             # Define callback for text changes to reset state
             def _reset_analysis_state():
@@ -2221,27 +2719,11 @@ with tab_ml_predict:
             aspect_engine = model_bundle.get("aspect")
             dealbreakers = model_bundle.get("dealbreakers", {"neg": set(), "pos": set()})
 
-            # 2. Secondary Modifiers - Advanced Settings Expander
+            # 2. Model Selection Logic (Legacy Support for UI/UX)
             if rating_models:
                 engine_options = list(rating_models.keys())
-                selected_model_name = st.session_state.get("selected_rating_engine", engine_options[0])
-                if selected_model_name not in engine_options:
-                    selected_model_name = engine_options[0]
-
-                with st.expander("Advanced settings", expanded=False):
-                    st.markdown("🎯 **Consensus Calibration (Fine-Tuning)**")
-                    st.info("The **1.0x Baseline** reflects the AI model's accuracy on the most recent hold-out test set from the training phase. Adjust the multipliers below to increase or decrease a model's influence on the final consensus rating.")
-                    
-                    for m_name in engine_options:
-                        st.slider(
-                            f"Weight Multiplier: {m_name}",
-                            min_value=0.5,
-                            max_value=2.0,
-                            value=1.0,
-                            step=0.05,
-                            key=f"weight_mult_{m_name}",
-                            help=f"Manually adjust the influence of {m_name} in the final committee vote."
-                        )
+                # Default to the first available model (usually Logistic Regression)
+                selected_model_name = engine_options[0]
             else:
                 selected_model_name = "None"
 
@@ -2369,7 +2851,7 @@ with tab_ml_predict:
                     votes_html_lines += (
                         f"<div style='margin-bottom: 10px; padding: 8px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb;'>"
                         f"<b>{v['name'].upper()}</b> voted <b style='color: #111827;'>{v['star']}★</b><br>"
-                        f"<span style='font-size: 0.8rem; color: #6b7280;'>Weight: {v['base_w']:.2f} (Test Accuracy) × {v['mult']:.1f} (Multiplier) = <b>{v['eff_w']:.2f}</b></span>"
+                        f"<span style='font-size: 0.8rem; color: #6b7280;'>Expert Weight: <b>{v['eff_w']:.2f}</b> (Test Accuracy)</span>"
                         f"</div>"
                     )
                 
@@ -2392,7 +2874,7 @@ with tab_ml_predict:
                     </div>
                     <b style='color: #15803d; font-size: 0.8rem;'>FORMULA</b><br>
                     <div style='background: #f0fdf4; padding: 8px; border-radius: 6px; margin: 6px 0 12px 0; border: 1px solid #bbf7d0;'>
-                        Consensus Winner = Star rating with highest Σ(Test Accuracy × Multiplier)
+                        Consensus Winner = Star rating with highest Σ(Expert Weight)
                     </div>
                     <b style='color: #1f2937; font-size: 0.8rem;'>STEP 1: INDIVIDUAL MODEL VOTES</b><br>
                     <div style='margin: 6px 0 12px 0;'>{votes_html_lines}</div>
@@ -2642,28 +3124,69 @@ with tab_ml_predict:
                             ]
                         ).properties(height=180)
                         
-                        sent_text_inside = (
+                        sent_text_inside_halo = (
                             alt.Chart(sent_df)
                             .transform_filter(f"datum.Percentage >= {label_inside_threshold}")
                             .transform_calculate(LabelX="datum.Percentage / 2")
-                            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff")
+                            .mark_text(align="center", baseline="middle", fontWeight=700, color="black", fontSize=13, stroke="black", strokeWidth=4, strokeOpacity=0.5)
                             .encode(
                                 x=alt.X("LabelX:Q"),
                                 y=alt.Y("Sentiment Label:N", sort=sent_order),
                                 text=alt.Text("Display:N"),
+                                tooltip=[
+                                    alt.Tooltip("Sentiment Label:N", title="Mood"),
+                                    alt.Tooltip("Percentage:Q", title="Share", format=".1%"),
+                                    alt.Tooltip("Count:Q", title="Sentence count"),
+                                ],
+                            )
+                        )
+                        sent_text_inside = (
+                            alt.Chart(sent_df)
+                            .transform_filter(f"datum.Percentage >= {label_inside_threshold}")
+                            .transform_calculate(LabelX="datum.Percentage / 2")
+                            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", fontSize=13)
+                            .encode(
+                                x=alt.X("LabelX:Q"),
+                                y=alt.Y("Sentiment Label:N", sort=sent_order),
+                                text=alt.Text("Display:N"),
+                                tooltip=[
+                                    alt.Tooltip("Sentiment Label:N", title="Mood"),
+                                    alt.Tooltip("Percentage:Q", title="Share", format=".1%"),
+                                    alt.Tooltip("Count:Q", title="Sentence count"),
+                                ],
                             )
                         )
                         sent_text_outside = (
                             alt.Chart(sent_df)
                             .transform_filter(f"datum.Percentage < {label_inside_threshold}")
-                            .mark_text(align="left", baseline="middle", dx=6, fontWeight=600, color="#374151")
+                            .mark_text(align="left", baseline="middle", dx=6, fontWeight=600, color="#374151", fontSize=13)
                             .encode(
                                 x=alt.X("Percentage:Q"),
                                 y=alt.Y("Sentiment Label:N", sort=sent_order),
                                 text=alt.Text("Display:N"),
+                                tooltip=[
+                                    alt.Tooltip("Sentiment Label:N", title="Mood"),
+                                    alt.Tooltip("Percentage:Q", title="Share", format=".1%"),
+                                    alt.Tooltip("Count:Q", title="Sentence count"),
+                                ],
                             )
                         )
-                        st.altair_chart(sent_chart + sent_text_inside + sent_text_outside, use_container_width=True)
+                        st.altair_chart(sent_chart + sent_text_inside_halo + sent_text_inside + sent_text_outside, use_container_width=True)
+                        
+                        # Center the caption below the chart (Diagnostic Sync)
+                        _, cap_col, _ = st.columns([1, 8, 1])
+                        with cap_col:
+                            st.caption("ℹ️ How does the AI 'read' the mood (sentiment)?", help=(
+                                "**What is this?**\n"
+                                "Instead of just looking at the 1-5 stars, our AI reads every single word the passenger wrote to understand their **true feelings**.\n\n"
+                                "**Data Source Mapping:**\n"
+                                "- Feature: `llm_sentiment_score` (-1.0 to 1.0)\n\n"
+                                "**AI Grouping Thresholds:**\n"
+                                "- 🟢 **Positive:** `llm_sentiment_score` > +0.05\n"
+                                "- ⚪ **Neutral:** between -0.05 and +0.05\n"
+                                "- 🔴 **Negative:** `llm_sentiment_score` < -0.05\n\n"
+                                "**The Secret:** Often, a passenger leaves 5 stars but writes a complaining review. This chart catches those 'hidden' emotions that star ratings miss!"
+                            ))
                 
                 with a_col2:
                     if aspect_dist:
