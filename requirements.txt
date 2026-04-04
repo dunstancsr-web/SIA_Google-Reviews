@@ -6,3 +6,6 @@ groq
 scikit-learn
 xgboost
 nltk
+plotly
+numpy
+requests
