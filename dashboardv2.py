@@ -729,11 +729,11 @@ def generate_key_takeaways(df: pd.DataFrame) -> str:
     if len(df) == 0:
         return "No data available."
     
-    negative_pct = df["rating"].between(1, 2).mean() * 100
+    negative_sentiment_share = (df["llm_sentiment_score"] < -0.05).mean() * 100
     avg_rating = df["rating"].mean()
-    top_platform = df["published_platform"].value_counts().idxmax() if df["published_platform"].notna().any() else "Unknown"
+    total_reviews = len(df)
     
-    return f"📊 {negative_pct:.1f}% of reviews are negative | ⭐ Avg rating: {avg_rating:.2f} | 📱 Most reviews from {top_platform}"
+    return f"📊 {negative_sentiment_share:.0f}% negative sentiment reviews | ⭐ Avg rating: {avg_rating:.1f} | 📝 Total # Reviews: {total_reviews:,}"
 
 def _format_date_window(df: pd.DataFrame) -> str:
     date_data = df["published_date"].dropna() if "published_date" in df.columns else pd.Series([], dtype="datetime64[ns]")
@@ -1238,8 +1238,8 @@ time_series = (
     .reset_index()
 )
 
-tab_ml_predict, tab_overview, tab_explore, tab_export, tab_pre_eda, tab_post_eda, tab_insights = st.tabs(
-    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export", "📊 Pre-Model EDA", "🧠 Post-Model AI EDA", "🧠 Macro Insights"]
+tab_ml_predict, tab_overview, tab_explore, tab_export, tab_insights = st.tabs(
+    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export", "🧠 Macro Insights"]
 )
 
 with tab_export:
@@ -1985,31 +1985,183 @@ with tab_overview:
     # --- NEW CHART: ENGAGEMENT ANALYSIS (REVIEW DEPTH) ---
     
 
+
     st.write("")
-    with st.expander("📝 Text Insights", expanded=False):
-        st.subheader("Text length vs rating")
-        st.caption("Explore if longer reviews tend to receive higher or lower ratings.")
-        text_length_chart = (
-            alt.Chart(filtered.dropna(subset=["rating", "text_length"]))
-            .mark_circle(size=60, opacity=0.35, color="#8c564b")
-            .encode(
-                x=alt.X("rating:Q", title="Rating", scale=alt.Scale(domain=[1, 5])),
-                y=alt.Y("text_length:Q", title="Text length (characters)"),
-                tooltip=[
-                    alt.Tooltip("rating:Q", title="Rating"),
-                    alt.Tooltip("text_length:Q", title="Text length"),
-                    alt.Tooltip("published_platform:N", title="Platform"),
-                ],
+    st.subheader("Predictive Model EDA")
+
+    with st.expander("Show More", expanded=False):
+        # Predictive Model EDA Chart Logic
+        pm_eda_raw = (
+            filtered.groupby("rating", dropna=True)
+            .agg({
+                "has_negative_dealbreaker": "sum",
+                "llm_sentiment_score": "mean",
+                "vader_min": "mean"
+            })
+            .rename(columns={"llm_sentiment_score": "avg_sentiment", "vader_min": "avg_vader"})
+            .reset_index()
+        )
+        # Get review counts for share calculation and stack calculation
+        rating_counts = filtered.groupby("rating", dropna=True).size().reset_index(name="total_count")
+        pm_eda_raw = pm_eda_raw.merge(rating_counts, on="rating")
+        
+        # Calculate "Positive" (Clean) reviews by user formula
+        pm_eda_raw["has_positive_dealbreaker"] = pm_eda_raw["total_count"] - pm_eda_raw["has_negative_dealbreaker"]
+        
+        # Melt for stacked chart
+        pm_eda_stacked = pm_eda_raw.melt(
+            id_vars=["rating", "total_count", "avg_sentiment", "avg_vader"],
+            value_vars=["has_negative_dealbreaker", "has_positive_dealbreaker"],
+            var_name="Category",
+            value_name="Value"
+        )
+        
+        # Calculate segment share for annotations and tooltips
+        pm_eda_stacked["segment_share"] = (pm_eda_stacked["Value"] / pm_eda_stacked["total_count"]).fillna(0)
+        
+        # Prettify labels for legend
+        pm_eda_stacked["Status"] = pm_eda_stacked["Category"].replace({
+            "has_negative_dealbreaker": "Pain Point detected",
+            "has_positive_dealbreaker": "has_positive_dealbreaker (Clean)"
+        })
+        
+        pm_eda_stacked["Display"] = pm_eda_stacked.apply(
+            lambda row: f"{int(row['Value'])} ({row['segment_share']:.0%})" if row['Value'] > 0 else "", axis=1
+        )
+        
+        label_threshold_pm = 0.20
+
+        # Base Chart for the stacked view
+        pm_eda_base = (
+            alt.Chart(pm_eda_stacked)
+            .transform_stack(
+                stack='Value',
+                as_=['y1', 'y2'],
+                groupby=['rating'],
+                offset='zero',
             )
-            .properties(height=320)
+            .transform_calculate(
+                middle='(datum.y1 + datum.y2) / 2'
+            )
         )
 
-        trend_line = text_length_chart.transform_regression(
-            "rating",
-            "text_length",
-        ).mark_line(color="#1f77b4")
+        pm_eda_bars = (
+            pm_eda_base.mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5) 
+            .encode(
+                x=alt.X("rating:O", title="Rating Score", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("y1:Q", title="Number of Reviews"),
+                y2="y2:Q",
+                color=alt.Color(
+                    "Status:N",
+                    scale=alt.Scale(
+                        domain=["Pain Point detected", "has_positive_dealbreaker (Clean)"],
+                        range=["#ef4444", "#10b981"] # Red for Pain Point, Green for clean
+                    ),
+                    legend=alt.Legend(orient="bottom", titleFontSize=12, labelFontSize=11)
+                ),
+                tooltip=[
+                    alt.Tooltip("rating:O", title="Rating Score"),
+                    alt.Tooltip("Status:N", title="Status"),
+                    alt.Tooltip("Value:Q", title="Segment Count", format=","),
+                    alt.Tooltip("segment_share:Q", title="Segment Share (%)", format=".1%"),
+                    alt.Tooltip("total_count:Q", title="Total Rating Reviews", format=","),
+                    alt.Tooltip("avg_sentiment:Q", title="Mean LLM Sentiment", format=".2f"),
+                    alt.Tooltip("avg_vader:Q", title="Mean Vader Min", format=".2f"),
+                ]
+            )
+            .properties(height=350, title=alt.TitleParams(text="Pain Point (Flag) Distribution by Rating", anchor='middle', fontSize=16, fontWeight=600))
+        )
+        
+        pm_eda_text_halo = (
+            pm_eda_base.transform_filter(f"datum.segment_share >= {label_threshold_pm}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="black", dy=0, fontSize=13, stroke="black", strokeWidth=4, strokeOpacity=0.5)
+            .encode(
+                x=alt.X("rating:O"),
+                y=alt.Y("middle:Q"),
+                text=alt.Text("Display:N")
+            )
+        )
+        
+        pm_eda_text_inside = (
+            pm_eda_base.transform_filter(f"datum.segment_share >= {label_threshold_pm}")
+            .mark_text(align="center", baseline="middle", fontWeight=700, color="#ffffff", dy=0, fontSize=13)
+            .encode(
+                x=alt.X("rating:O"),
+                y=alt.Y("middle:Q"),
+                text=alt.Text("Display:N")
+            )
+        )
+        
+        st.altair_chart(pm_eda_bars + pm_eda_text_halo + pm_eda_text_inside, use_container_width=True)
+        
+        st.caption("ℹ️ **Footnote: What are Pain Points (has_negative_dealbreaker)?**")
+        st.caption("This stacked view shows the ratio of 'Clean' reviews vs. those with significant Pain Points. "
+                "`has_negative_dealbreaker` is a binary sensor (0 or 1) indicating a critical failure keyword (e.g., 'delay', 'rude'). "
+                "The `has_positive_dealbreaker` category here represents all other reviews in that rating bucket (Total Count minus Pain Points).")
 
-        st.altair_chart(text_length_chart + trend_line, use_container_width=True)
+        st.write("")
+        st.markdown("**LLM Sentiment vs VADER Min (Score Distribution)**")
+        st.caption("Comparing the lowest sentence sentiment (VADER Min) against the overall context-aware score (LLM Sentiment).")
+        
+        scatter_data = filtered.dropna(subset=["vader_min", "llm_sentiment_score", "rating"])
+        scatter_chart = (
+            alt.Chart(scatter_data)
+            .mark_circle(size=60, opacity=0.4)
+            .encode(
+                x=alt.X("vader_min:Q", title="VADER Min", scale=alt.Scale(domain=[-1, 1])),
+                y=alt.Y("llm_sentiment_score:Q", title="LLM Sentiment Score", scale=alt.Scale(domain=[-1, 1])),
+                color=alt.Color(
+                    "rating:O", 
+                    title="Star Rating",
+                    scale=alt.Scale(domain=[1, 2, 3, 4, 5], range=["#ef4444", "#ef4444", "#9ca3af", "#10b981", "#10b981"])
+                ),
+                tooltip=[
+                    alt.Tooltip("rating:O", title="Rating"),
+                    alt.Tooltip("vader_min:Q", title="VADER Min", format=".2f"),
+                    alt.Tooltip("llm_sentiment_score:Q", title="LLM Sentiment", format=".2f"),
+                    alt.Tooltip("text_length:Q", title="Text Length", format=","),
+                ]
+            )
+            .properties(height=400, title=alt.TitleParams(text="Sentiment Model Agreement map", anchor='middle', fontSize=16, fontWeight=600))
+        )
+        
+        # Adding Quadrant Lines (Rules)
+        rule_x = alt.Chart(pd.DataFrame({'x': [0]})).mark_rule(color='#9ca3af', size=1.5, opacity=0.6).encode(x='x')
+        rule_y = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='#9ca3af', size=1.5, opacity=0.6).encode(y='y')
+        
+        # Quadrant Labels
+        quadrant_labels = pd.DataFrame([
+            {"x": 0.5, "y": 0.8, "text": "Positive Consensus"},
+            {"x": -0.5, "y": -0.8, "text": "Negative Consensus"},
+            {"x": -0.6, "y": 0.8, "text": "LLM Nuance (LLM > VADER)"},
+            {"x": 0.6, "y": -0.8, "text": "Hidden Negativity (VADER > LLM)"}
+        ])
+        
+        labels_chart = (
+            alt.Chart(quadrant_labels)
+            .mark_text(fontSize=12, fontWeight=600, opacity=0.5, color="#4b5563")
+            .encode(x="x:Q", y="y:Q", text="text:N")
+        )
+        
+        st.altair_chart(scatter_chart + rule_x + rule_y + labels_chart, use_container_width=True)
+
+        st.caption("ℹ️ **Footnote: How to read the Sentiment Agreement Map?**")
+        st.caption("The quadrants reveal where traditional lexical rules (VADER) and advanced context-aware AI (LLM) align or diverge:")
+        st.caption(" - **Positive/Negative Consensus**: High confidence—both models agree on the emotional tone.")
+        st.caption(" - **LLM Nuance (Top Left)**: Rules detect a 'bad word' or negative sentence, but the AI correctly identifies the overall context as Positive.")
+        st.caption(" - **Hidden Negativity (Bottom Right)**: Rules see no negative sentences, but the AI detects sarcasm, passive-aggression, or overall dissatisfaction.")
+
+        st.write("")
+        st.caption("🔍 **Model Accuracy Notes (Dot Color = Rating):**")
+        st.caption("*   **Negative Consensus**: Red dots = both Correct. Green dots = **both WRONG**.")
+        st.caption("*   **LLM Nuance (Top Left)**: Green dots = **LLM Correct** & VADER Wrong. Red dots = **LLM WRONG** & VADER Correct.")
+        st.caption("*   **Positive Consensus**: Green dots = both Correct.")
+        st.caption("*   **Hidden Negativity (Bottom Right)**: Red dots = **LLM Correct**, VADER Wrong.")
+
+    
+    st.write("")
+    st.subheader(" Text Insights")
+    with st.expander("Show More", expanded=False):
 
         st.subheader("Helpfulness insights")
         st.caption("Understand which reviews are marked as helpful and what characteristics they share.")
@@ -3289,67 +3441,10 @@ with tab_ml_predict:
                 st.warning("Please enter some text to begin analysis.")
 
 
-with tab_pre_eda:
-    st.markdown("## 📊 Pre-Model EDA (The Raw Data)", help="Raw data truths before any AI intervention.")
-    st.info("These insights examine the raw, un-modeled data to uncover baseline Truths.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**1. Platform Emotional Bias**")
-        st.caption("Mobile users are often more positive than Desktop users (+0.2★). This block plots your currently filtered data.")
-        platform_agg = filtered.dropna(subset=['published_platform']).groupby("published_platform")["rating"].mean().reset_index()
-        fig_platform = px.bar(platform_agg, x="published_platform", y="rating", color="published_platform",
-                              title="Average Rating by Platform", text_auto=".2f")
-        fig_platform.update_layout(hovermode='closest')
-        st.plotly_chart(fig_platform, use_container_width=True)
-        
-    with col2:
-        st.markdown("**2. The Review Length Paradox**")
-        st.caption("Extremes (1★ and 5★) often contain the longest reviews. Let's look at average text length vs rating.")
-        filtered_len = filtered.copy()
-        filtered_len['text_length'] = filtered_len['text'].fillna("").apply(len)
-        len_agg = filtered_len.groupby("rating")["text_length"].mean().reset_index()
-        fig_len = px.bar(len_agg, x="rating", y="text_length", color="rating", 
-                             title="Average Character Count by Star Rating", text_auto=".0f")
-        fig_len.update_layout(xaxis=dict(dtick=1), hovermode='closest')
-        st.plotly_chart(fig_len, use_container_width=True)
-        
-    st.markdown("**3. Rating Distribution (The Smote Justification)**")
-    st.caption("Notice the massive spike in 5-star reviews? Without artificially re-balancing this (undersampling 5s, oversampling 2s), an AI would lazily guess '5 Stars' every time.")
-    fig_dist = px.histogram(filtered, x="rating", title="Rating Distribution Data Gap", nbins=5, color="rating", text_auto=True)
-    fig_dist.update_layout(xaxis_title="Star Rating", yaxis_title="Review Count", hovermode='closest', xaxis=dict(dtick=1))
-    st.plotly_chart(fig_dist, use_container_width=True)
 
-with tab_post_eda:
-    st.markdown("## 🧠 Post-Model AI EDA (The Algorithm's Discoveries)", help="Insights uncovered using VADER and Dealbreaker algorithms.")
-    st.info("Now we look at the 'Hidden' data—Sentimental analysis mapped against physical Star Ratings.")
-    
-    # We analyze the entire dataset unconditionally to show the statistical maximum. Wrapped in cache down below.
-    with st.spinner("Calculating VADER & Cluster segments for EDA..."):
-        df_sample = get_enriched_eda_data(filtered)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**1. The Discrepancy Matrix**")
-        st.caption("Highlights 'Confused Promoters' (1★ but High Vader) and 'Sarcastic Detractors' (5★ but Low Vader).")
-        
-        fig_matrix = px.scatter(df_sample, x="rating", y="vader_score", color="segment", 
-                                color_discrete_map={"Sarcastic Detractors": "#ef4444", "Confused Promoters": "#3b82f6", "Expected Correlation": "#9ca3af"},
-                                title="VADER vs Rating Matrix", opacity=0.6)
-        fig_matrix.add_hline(y=0, line_dash="dash", line_color="black")
-        fig_matrix.update_layout(hovermode='closest', xaxis=dict(dtick=1))
-        st.plotly_chart(fig_matrix, use_container_width=True)
 
-    with col2:
-        st.markdown("**2. Dealbreaker Gravity Effect**")
-        st.caption("Visualizing the algorithmic anchor. Notice how the average rating plummets when our AI detects a dealbreaker.")
-        db_agg = df_sample.groupby("has_negative_dealbreaker")["rating"].mean().reset_index()
-        db_agg["has_negative_dealbreaker"] = db_agg["has_negative_dealbreaker"].map({True: "Dealbreaker Present", False: "Clean Text"})
-        
-        fig_db = px.bar(db_agg, x="has_negative_dealbreaker", y="rating", color="has_negative_dealbreaker", text_auto='.2f',
-                        title="Average Rating Modifier", color_discrete_sequence=["#e11d48", "#10b981"])
-        fig_db.update_layout(hovermode='closest')
-        st.plotly_chart(fig_db, use_container_width=True)
+
 
 
 
