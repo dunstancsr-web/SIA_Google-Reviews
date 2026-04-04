@@ -1,0 +1,1 @@
+{"accuracy": 0.69125, "features": ["clean_text", "vader_score", "vader_class", "vader_min", "vader_max", "vader_range", "has_negative_dealbreaker", "has_pos_dealbreaker", "llm_sentiment_score"], "trained_at": "Experimental Audit 4k"}

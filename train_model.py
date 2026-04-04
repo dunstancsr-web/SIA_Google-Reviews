@@ -32,22 +32,15 @@ def clean_text(text):
     text = re.sub(r'[^a-z0-9\s]', '', text)
     return text.strip()
 
-def get_vader_class(text, analyzer):
-    """Classify overall review tone into a discrete label."""
-    score = analyzer.polarity_scores(str(text))['compound']
-    if score > 0.05:
-        return "Positive"
-    elif score < -0.05:
-        return "Negative"
-    return "Neutral"
-
-def get_sentence_vader_stats(text, analyzer):
-    """Return (min, max, range) of per-sentence VADER scores."""
+def get_vader_min(text, analyzer):
+    """Isolates the single angriest sentence (The Pain Point)."""
     sentences = re.split(r'[.!?]', str(text))
     scores = [analyzer.polarity_scores(s)['compound'] for s in sentences if s.strip()]
-    if not scores:
-        return 0.0, 0.0, 0.0
-    return min(scores), max(scores), max(scores) - min(scores)
+    return min(scores) if scores else 0.0
+
+def has_dealbreaker(text, word_set):
+    words = set(text.split())
+    return 1 if words & word_set else 0
 
 def has_dealbreaker(text, word_set):
     words = set(text.split())
@@ -57,7 +50,13 @@ def has_dealbreaker(text, word_set):
 
 def main():
     print("Loading data...")
-    df = pd.read_csv('data/singapore_airlines_reviews.csv')
+    # --- MASTER DATA CHECK ---
+    MASTER_PATH = 'data/singapore_airlines_reviews_core4.csv'
+    if os.path.exists(MASTER_PATH):
+        print(f"✨ Found 'Core Four' Master Source: {MASTER_PATH}")
+        df = pd.read_csv(MASTER_PATH)
+    else:
+        df = pd.read_csv('data/singapore_airlines_reviews.csv')
     df = df.dropna(subset=['text', 'rating'])
     
     # --- CLASS BALANCING ---
@@ -80,22 +79,15 @@ def main():
 
     
     # --- FEATURE ENGINEERING ---
-    print("Cleaning text and engineering features...")
     analyzer = SentimentIntensityAnalyzer()
     
-    df_bal['clean_text'] = df_bal['text'].apply(clean_text)
-    df_bal['vader_score'] = df_bal['text'].apply(
-        lambda x: analyzer.polarity_scores(str(x))['compound']
-    )
-    df_bal['vader_class'] = df_bal['text'].apply(
-        lambda x: get_vader_class(x, analyzer)
-    )
-    
-    # Sentence-level VADER features
-    sentence_stats = df_bal['text'].apply(lambda x: get_sentence_vader_stats(x, analyzer))
-    df_bal['vader_min'] = sentence_stats.apply(lambda x: x[0])
-    df_bal['vader_max'] = sentence_stats.apply(lambda x: x[1])
-    df_bal['vader_range'] = sentence_stats.apply(lambda x: x[2])
+    # Check if we can skip redundant NLP processing (Optimization)
+    if 'vader_min' in df_bal.columns and 'has_negative_dealbreaker' in df_bal.columns:
+        print("⚡ Core Four features detected. Skipping on-the-fly NLP computation...")
+    else:
+        print("Cleaning text and engineering Core Four features...")
+        df_bal['clean_text'] = df_bal['text'].apply(clean_text)
+        df_bal['vader_min'] = df_bal['text'].apply(lambda x: get_vader_min(x, analyzer))
     
     stop_words = list(nltk.corpus.stopwords.words('english')) + [
         'singapore', 'airlines', 'airline', 'flight'
@@ -110,20 +102,18 @@ def main():
     print("PASS 1: Training scout LR to extract dealbreaker words...")
     print("="*60)
     
-    X_pass1 = df_bal[['clean_text', 'vader_score', 'vader_class',
-                       'vader_min', 'vader_max', 'vader_range']]
+    X_pass1 = df_bal[['clean_text', 'vader_min']]
     y = df_bal['rating'].astype(int)
     
     X_train_p1, X_test_p1, y_train, y_test = train_test_split(
         X_pass1, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Pass-1 preprocessor (no dealbreaker flags yet)
+    # Pass-1 preprocessor (Minimalist)
     prep_pass1 = ColumnTransformer(transformers=[
         ('tfidf', TfidfVectorizer(max_features=10000, stop_words=stop_words,
                                    ngram_range=(1, 2), sublinear_tf=True), 'clean_text'),
-        ('sent',  'passthrough', ['vader_score', 'vader_min', 'vader_max', 'vader_range']),
-        ('class', OneHotEncoder(handle_unknown='ignore'), ['vader_class']),
+        ('sent',  'passthrough', ['vader_min']),
     ])
     
     lr_scout = Pipeline([
@@ -164,28 +154,24 @@ def main():
     print("="*60)
     
     neg_words = set(dealbreakers[1] + dealbreakers[2])
-    pos_words = set(dealbreakers[4] + dealbreakers[5])
     
-    df_bal['has_neg_dealbreaker'] = df_bal['clean_text'].apply(lambda t: has_dealbreaker(t, neg_words))
-    df_bal['has_pos_dealbreaker'] = df_bal['clean_text'].apply(lambda t: has_dealbreaker(t, pos_words))
+    df_bal['has_negative_dealbreaker'] = df_bal['clean_text'].apply(lambda t: has_dealbreaker(t, neg_words))
     
-    # Full feature set
-    feature_cols = ['clean_text', 'vader_score', 'vader_class',
-                    'vader_min', 'vader_max', 'vader_range',
-                    'has_neg_dealbreaker', 'has_pos_dealbreaker']
+    # Core Four feature set
+    feature_cols = ['clean_text', 'vader_min', 'has_negative_dealbreaker', 'llm_sentiment_score']
     X = df_bal[feature_cols]
     
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Full 5-stream preprocessor
+    # Minimalist Core Four Preprocessor
     preprocessor = ColumnTransformer(transformers=[
         ('tfidf', TfidfVectorizer(max_features=10000, stop_words=stop_words,
                                    ngram_range=(1, 2), sublinear_tf=True), 'clean_text'),
-        ('sent',  'passthrough', ['vader_score', 'vader_min', 'vader_max', 'vader_range']),
-        ('class', OneHotEncoder(handle_unknown='ignore'), ['vader_class']),
-        ('flags', 'passthrough', ['has_neg_dealbreaker', 'has_pos_dealbreaker']),
+        ('v_min', 'passthrough', ['vader_min']),
+        ('flags', 'passthrough', ['has_negative_dealbreaker']),
+        ('llm',   'passthrough', ['llm_sentiment_score']),
     ])
     
     models_to_train = {
@@ -232,7 +218,7 @@ def main():
             "accuracy": round(float(test_acc), 4),  # Legacy fallback
             "display_name": display_names[name],
             "trained_at": datetime.now().isoformat(),
-            "feature_streams": 5,
+            "feature_streams": 4,
             "features": feature_cols
         }
         with open(f'models/{name}_meta.json', 'w') as f:

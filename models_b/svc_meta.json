@@ -1,0 +1,10 @@
+{
+  "test_accuracy": 0.5159,
+  "train_accuracy": 0.5161,
+  "display_name": "Linear SVM (B)",
+  "trained_at": "2026-04-04T19:30:42.003468",
+  "feature_streams": 1,
+  "features": [
+    "llm_sentiment_score"
+  ]
+}

@@ -1,18 +1,14 @@
 {
-  "test_accuracy": 0.6138,
-  "train_accuracy": 0.7323,
-  "accuracy": 0.6138,
+  "test_accuracy": 0.6058,
+  "train_accuracy": 0.7692,
+  "accuracy": 0.6058,
   "display_name": "Random Forest",
-  "trained_at": "2026-04-01T22:35:08.957458",
-  "feature_streams": 5,
+  "trained_at": "2026-04-04T17:50:57.555113",
+  "feature_streams": 4,
   "features": [
     "clean_text",
-    "vader_score",
-    "vader_class",
     "vader_min",
-    "vader_max",
-    "vader_range",
-    "has_neg_dealbreaker",
-    "has_pos_dealbreaker"
+    "has_negative_dealbreaker",
+    "llm_sentiment_score"
   ]
 }

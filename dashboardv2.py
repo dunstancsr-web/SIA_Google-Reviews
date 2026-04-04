@@ -13,6 +13,8 @@ import html
 import json
 import ast
 import textwrap
+import requests
+from datetime import datetime
 
 os.makedirs('./nltk_data', exist_ok=True)
 nltk.data.path.append('./nltk_data')
@@ -22,9 +24,11 @@ except Exception:
     pass
 
 @st.cache_resource
-def load_ml_models():
+def load_ml_models(model_dir: str = "models"):
     """
     Loads rating models, aspect engine, dealbreaker words, and dynamic benchmarks.
+    Args:
+        model_dir (str): The directory where the models and metadata are stored.
     """
     try:
         models = {}
@@ -33,9 +37,9 @@ def load_ml_models():
         dealbreaker_words = {"neg": set(), "pos": set()}
         
         model_files = {
-            "Logistic Regression": ("models/lr_model.pkl", "models/lr_meta.json"),
-            "Random Forest": ("models/rf_model.pkl", "models/rf_meta.json"),
-            "Linear SVM": ("models/svc_model.pkl", "models/svc_meta.json")
+            "Logistic Regression": (f"{model_dir}/lr_model.pkl", f"{model_dir}/lr_meta.json"),
+            "Random Forest": (f"{model_dir}/rf_model.pkl", f"{model_dir}/rf_meta.json"),
+            "Linear SVM": (f"{model_dir}/svc_model.pkl", f"{model_dir}/svc_meta.json")
         }
         
         for name, (pkl_path, meta_path) in model_files.items():
@@ -55,10 +59,12 @@ def load_ml_models():
                     benchmarks[name] = m_meta.get("test_accuracy", m_meta.get("accuracy", 0.5))
                     # Load Train Acc for the audit table
                     benchmarks[name + "_train"] = m_meta.get("train_accuracy", 0.8)
+                    # Load feature list for awareness
+                    benchmarks[name + "_features"] = m_meta.get("features", [])
             else:
                 benchmarks[name] = 0.5
                     
-        # Load the Autonomous Aspect Engine
+        # Load the Autonomous Aspect Engine (Always uses the main model)
         aspect_path = "models/aspect_model.pkl"
         if os.path.exists(aspect_path):
             with open(aspect_path, 'rb') as f:
@@ -72,11 +78,31 @@ def load_ml_models():
                 dealbreaker_words["neg"] = set(db.get("1", []) + db.get("2", []))
                 dealbreaker_words["pos"] = set(db.get("4", []) + db.get("5", []))
                     
+        # Check if any model requires LLM features
+        uses_llm_feature = any("llm_sentiment_score" in benchmarks.get(name + "_features", []) for name in models.keys())
+        
         return {"rating": models, "aspect": aspect_model,
-                "benchmarks": benchmarks, "dealbreakers": dealbreaker_words}
+                "benchmarks": benchmarks, "dealbreakers": dealbreaker_words,
+                "uses_llm_feature": uses_llm_feature}
     except Exception as e:
         return {"rating": {}, "aspect": None,
-                "benchmarks": {}, "dealbreakers": {"neg": set(), "pos": set()}}
+                "benchmarks": {}, "dealbreakers": {"neg": set(), "pos": set()},
+                "uses_llm_feature": False}
+
+@st.cache_data(show_spinner=False)
+def get_ollama_sentiment(text):
+    """Real-time ping to the local Ollama instance."""
+    try:
+        prompt = f"Analyze sentiment of this review. Output ONLY a decimal from -1.0 to 1.0. No text. Review: \"{text[:500]}\""
+        payload = {"model": "llama3:latest", "prompt": prompt, "stream": False, "options": {"temperature": 0}}
+        resp = requests.post("http://localhost:11434/api/generate", json=payload, timeout=10)
+        if resp.status_code == 200:
+            raw = resp.json().get("response", "0.0")
+            match = re.search(r"[-+]?\d*\.\d+|\d+", raw)
+            return float(match.group()) if match else 0.0
+    except:
+        return None
+    return None
 
 def render_star_rating(score, color="#ca8a04"):
     """
@@ -106,6 +132,9 @@ def render_star_rating(score, color="#ca8a04"):
 @st.cache_resource
 def get_vader_analyzer():
     return SentimentIntensityAnalyzer()
+
+# 2. Page Configuration
+st.set_page_config(page_title="Self‑Service Data Hub", page_icon="SIA", layout="wide")
 
 
 st.set_page_config(page_title="Self‑Service Data Hub", page_icon="SIA", layout="wide")
@@ -519,17 +548,25 @@ REQUIRED_COLUMNS = {
     "type",
 }
 
+# --- MASTER DISPLAY & DICTIONARY ORDER ---
+# The order here defines the numbering (#) and the left-to-right sequence in Raw Data tables.
 COLUMN_DEFINITIONS = {
     "published_date": "Date the review was published (UTC converted to local).",
     "rating": "Customer rating score (1 = lowest, 5 = highest).",
-    "helpful_votes": "Number of users who marked the review as helpful.",
+    "published_platform": "Where the review was posted (site/appara/source).",
     "title": "Review title or headline.",
     "text": "Full review text.",
-    "published_platform": "Where the review was posted (site/app/source).",
-    "type": "Review category/type (e.g., cabin class, route, or review source type).",
+    "llm_sentiment_score": "High-nuance sentiment score generated by the AI model (-1.0 to 1.0).",
+    "vader_min": "The compound sentiment score of the most negative sentence in the review.",
+    "has_negative_dealbreaker": "Binary flag (0 or 1) indicating if the review contains critical service failure keywords.",
+    "text_length": "Number of characters in the full review text (measures detail).",
+    "clean_text": "Lowercase, standardized version of the review with punctuation, special characters, and extra whitespace removed. This provides a 'noise-free' signal for machine learning models.",
+    "helpful_votes": "Number of users who marked the review as helpful.",
+    "type": "Review category/type (e.g., cabin class, route, or review source type)."
 }
 
 COLUMN_ORDER = list(COLUMN_DEFINITIONS.keys())
+ENGINEERED_COLS = ["clean_text", "vader_min", "has_negative_dealbreaker", "llm_sentiment_score", "text_length"]
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_data(path: str) -> pd.DataFrame:
@@ -545,7 +582,82 @@ def load_data(path: str) -> pd.DataFrame:
     df["rating"] = pd.to_numeric(df["rating"], errors="coerce")
     df["helpful_votes"] = pd.to_numeric(df["helpful_votes"], errors="coerce")
     df["text_length"] = df["text"].fillna("").str.len()
+
+    # --- SELF-HEALING FEATURE CHECK ---
+    # If the master dataset has placeholder 0s for dealbreakers, run the sync logic
+    if "has_negative_dealbreaker" in df.columns and (df["has_negative_dealbreaker"] == 0).all():
+        st.info("🔄 First-time setup: Synchronizing 'Pain Point' sensors...")
+        
+        # 1. Load Dealbreaker Keywords
+        try:
+            with open("models/dealbreaker_words.json", "r") as f:
+                db_data = json.load(f)
+                neg_db = set(db_data.get("1", []) + db_data.get("2", []))
+        except:
+            neg_db = set()
+            
+        # 2. Clean Text Logic
+        def clean_text_local(text):
+            if not isinstance(text, str): return ""
+            return re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
+        
+        if "clean_text" not in df.columns:
+            df["clean_text"] = df["text"].fillna("").apply(clean_text_local)
+            
+        # 3. Apply Scout Logic
+        def has_db(text, word_set):
+            words = set(str(text).split())
+            return 1 if words & word_set else 0
+            
+        df["has_negative_dealbreaker"] = df["clean_text"].apply(lambda t: has_db(t, neg_db))
+        
+        # 4. Save back to master CSV for persistene
+        try:
+            df.to_csv(path, index=False)
+            st.success("✅ Dealbreaker intelligence synchronized and saved to master dataset.")
+        except Exception as e:
+            st.warning(f"⚠️ Could not save synchronization: {e}")
+
     return df
+
+@st.cache_data(show_spinner=True)
+def get_enriched_eda_data(df):
+    """
+    Enriches the filtered dataframe with VADER compound scores and categorical segments
+    specifically for the Post-Model EDA tab.
+    """
+    if df.empty:
+        return df
+    
+    enriched = df.copy()
+    analyzer = get_vader_analyzer()
+    
+    # 1. Calculate Full Review VADER Score (Compound)
+    text_col = "text" if "text" in enriched.columns else "content"
+    if text_col in enriched.columns:
+        enriched['vader_score'] = enriched[text_col].fillna("").apply(
+            lambda x: analyzer.polarity_scores(str(x))['compound']
+        )
+    else:
+        enriched['vader_score'] = 0.0
+
+    # 2. Derive Segments (The Matrix Logic)
+    def categorize_segment(row):
+        rating = row.get('rating', 3)
+        vader = row.get('vader_score', 0)
+        
+        # Sarcastic Detractors: High Rating (4-5) but Negative VADER (< -0.1)
+        if rating >= 4 and vader < -0.1:
+            return "Sarcastic Detractors"
+        # Confused Promoters: Low Rating (1-2) but Positive VADER (> 0.1)
+        elif rating <= 2 and vader > 0.1:
+            return "Confused Promoters"
+        else:
+            return "Expected Correlation"
+            
+    enriched['segment'] = enriched.apply(categorize_segment, axis=1)
+    
+    return enriched
 
 @st.cache_data(show_spinner=False)
 def to_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -577,9 +689,11 @@ def build_data_dictionary(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for idx, col in enumerate(COLUMN_ORDER, start=1):
         series = df[col] if col in df.columns else pd.Series([], dtype="object")
+        origin = "🟢 Engineered" if col in ENGINEERED_COLS else "💎 Original"
         rows.append(
             {
                 "#": idx,
+                "Origin": origin,
                 "Column": col,
                 "Type": infer_type(series),
                 "Definition": COLUMN_DEFINITIONS.get(col, ""),
@@ -929,7 +1043,12 @@ st.markdown(
 )
 st.caption("A self-service dashboard to explore the data profile, filter, and export Singapore Airlines review data for your analysis needs. Use the sidebar/filters panel to customize your view and download the dataset that fits your goals.")
 
-df = load_data("data/singapore_airlines_reviews.csv")
+# --- INITIAL DATA LOAD (CORE FOUR STANDARD) ---
+MASTER_DATA_PATH = "data/singapore_airlines_reviews_core4.csv"
+if os.path.exists(MASTER_DATA_PATH):
+    df = load_data(MASTER_DATA_PATH)
+else:
+    df = load_data("data/singapore_airlines_reviews.csv")
 
 missing_cols = REQUIRED_COLUMNS - set(df.columns)
 if missing_cols:
@@ -1119,8 +1238,8 @@ time_series = (
     .reset_index()
 )
 
-tab_ml_predict, tab_overview, tab_explore, tab_export, tab_insights = st.tabs(
-    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export", "🧠 Macro Insights"]
+tab_ml_predict, tab_overview, tab_explore, tab_export, tab_pre_eda, tab_post_eda, tab_insights = st.tabs(
+    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export", "📊 Pre-Model EDA", "🧠 Post-Model AI EDA", "🧠 Macro Insights"]
 )
 
 with tab_export:
@@ -1178,15 +1297,22 @@ with tab_export:
         hide_index=True,
         column_config={
             "#": st.column_config.NumberColumn(width="small"),
+            "Origin": st.column_config.TextColumn(width="small", help="💎 Original: Raw platform data | 🟢 Engineered: Custom AI signals"),
+            "Column": st.column_config.TextColumn(width="medium"),
+            "Definition": st.column_config.TextColumn(width="large"),
             "Example": st.column_config.TextColumn(width="large"),
         },
     )
+    st.caption("🔍 **Legend**: **💎 Original** = Raw data from source. | **🟢 Engineered** = Intelligent signals calculated by our ML models.")
 
     st.subheader(
         "Raw Data",
         help="Preview the actual filtered rows to confirm relevance before downloading.",
     )
-    show_cols = ["published_date", "rating", "published_platform", "title", "text", "helpful_votes"]
+    # --- MASTER SYNCHRONIZATION ---
+    # We use the global COLUMN_ORDER as show_cols to ensure the sequence (# in dictionary) 
+    # perfectly matches the column positions in this Raw Data preview.
+    show_cols = COLUMN_ORDER
     row_option = st.radio(
         "Rows to display",
         ["First 10", "Last 10", "Custom range"],
@@ -1557,7 +1683,13 @@ with tab_explore:
             .reset_index(name="value")
         )
 
-    x_dtype = "T" if is_datetime64_any_dtype(filtered[x_col]) else "O"
+    # Detect axis type: T for time, N for discrete nominal (dealbreakers, rating), Q for quantitative
+    if is_datetime64_any_dtype(filtered[x_col]):
+        x_dtype = "T"
+    elif "has_" in x_col or "flag" in x_col or x_col in ["rating", "vader_class"]:
+        x_dtype = "N"
+    else:
+        x_dtype = "O" if not is_numeric_dtype(filtered[x_col]) else "Q"
     if chart_type == "Line" and x_dtype == "O":
         st.info("💡 Tip: Line charts work best with time or numeric X axes. Consider a bar chart if X is categorical.")
 
@@ -1593,12 +1725,72 @@ with tab_explore:
         else:
             st.warning("📊 Box plots require a numeric Y axis. Please select a metric instead of (count).")
 
-    st.altair_chart(chart, use_container_width=True)
+    # Add Selection for Drill-Down (2D Selection for Scatter Plots)
+    selection_fields = [x_col]
+    if chart_type == "Scatter" and y_col != "(count)":
+        selection_fields.append(y_col)
+        
+    selection = alt.selection_point(fields=selection_fields, on="click", name="select")
+    chart = chart.add_params(selection)
+    
+    # Conditional logic for different charts (Scatter/Box Plot handled above)
+    event_data = st.altair_chart(chart, use_container_width=True, on_select="rerun", key="exploration_drilldown")
     
     st.markdown(generate_chart_insight(filtered, x_col, y_col, agg_label))
-    # Get selected AI model from session state (default to auto)
     selected_model = st.session_state.get("selected_ai_model", "auto")
     st.markdown(generate_ai_insight(filtered, x_col, y_col, agg_label, selected_model))
+
+    # --- DRILL-DOWN AUDIT LAYER ---
+    st.divider()
+    
+    # Check if a point was selected in the chart
+    selected_points = []
+    if event_data and "selection" in event_data and "select" in event_data["selection"]:
+        selected_points = event_data["selection"]["select"]
+    
+    if selected_points:
+        st.subheader("🔍 Detailed Audit: Underlying Records")
+        
+        # Dynamic 2D Filtering (X and Y axis support)
+        point = selected_points[0]
+        drill_df = filtered.copy()
+        filter_status = []
+        
+        for f_key, f_val in point.items():
+            if f_key in drill_df.columns:
+                drill_df = drill_df[drill_df[f_key] == f_val]
+                filter_status.append(f"**{f_key}** = `{f_val}`")
+        
+        if not drill_df.empty:
+            # Ensure new features are present
+            for col in ['llm_sentiment_score', 'vader_min', 'has_negative_dealbreaker']:
+                if col not in drill_df.columns:
+                    drill_df[col] = 0.0
+            
+            # Calculate Sarcasm Discrepancy (Pain-Point Audit)
+            drill_df['sarcasm_delta'] = (drill_df['vader_min'] - drill_df['llm_sentiment_score']).abs()
+            
+            st.info(f"Showing **{len(drill_df)}** reviews where {' and '.join(filter_status)}. (Sorted by High Sarcasm/Nuance)")
+            
+            # Select and reorder columns for Core Four auditing
+            audit_cols = [
+                'published_date', 'rating', 'text', 
+                'llm_sentiment_score', 'vader_min', 'sarcasm_delta',
+                'has_negative_dealbreaker'
+            ]
+            # Filter for only columns that actually exist
+            final_audit_cols = [c for c in audit_cols if c in drill_df.columns]
+            
+            st.dataframe(
+                drill_df[final_audit_cols].sort_values(by='sarcasm_delta', ascending=False),
+                use_container_width=True,
+                height=500
+            )
+        else:
+            st.info("💡 Click on a bar or point in the chart above to explore the underlying reviews.")
+    else:
+        st.info("💡 **Auditing Tip**: You can click on any bar, line point, or area in the chart to 'drill down' and see the actual review text and AI scores below.")
+
 
 models = load_ml_models()
 
@@ -1629,6 +1821,7 @@ with tab_ml_predict:
                 "status": "Using local routing engine",
                 "llm_attempted": False,
                 "llm_used": False,
+                "proxy_mode": not use_llm, 
             }
             
             # --- CONTEXT-AWARE LLM UPGRADE ---
@@ -1659,16 +1852,16 @@ with tab_ml_predict:
                             
                 if valid_sentences:
                     prompt = (
-                        "You are a specialized aviation data parser. Respond ONLY with a valid JSON array. No preamble. No markdown. No explanations.\n\n"
+                        "You are a specialized aviation data parser. Respond ONLY with a valid JSON. No preamble. No markdown. No explanations.\n\n"
                         "STRICT OUTPUT SCHEMA:\n"
-                        '[{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]\n\n'
+                        '{"overall_sentiment": float (-1.0 to 1.0), "annotations": [{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]}\n\n'
                         "TAXONOMY RULES:\n"
                         "1. Use ONLY these topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
                         "2. EXPLICIT COMPETITOR MENTIONS: If they praise a competitor (e.g., 'Emirates has better seats'), that is a 'Negative' sentiment for SIA.\n"
                         "3. SARCASM: Phrases like 'Thanks for the 5-hour wait' are 'Negative'.\n"
                         "4. FACTUAL: If no topic is mentioned, return [].\n\n"
                         "ONE-SHOT EXAMPLE:\n"
-                        '[{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]\n\n'
+                        '{"overall_sentiment": 0.85, "annotations": [{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]}\n\n'
                         "INPUT DATA:\n"
                     )
                     prompt += json.dumps(valid_sentences)
@@ -1680,52 +1873,42 @@ with tab_ml_predict:
                             from groq import Groq
                             client = Groq(api_key=api_key)
                             resp = client.chat.completions.create(
-                                messages=[{"role": "system", "content": "You are a JSON API. Output raw JSON array only, no markdown."}, {"role": "user", "content": prompt}],
+                                messages=[{"role": "system", "content": "You are a JSON API. Output ONLY a raw JSON object. No preamble, no markdown code blocks."}, {"role": "user", "content": prompt}],
                                 model="llama-3.1-8b-instant", temperature=0
                             )
                             llm_out = resp.choices[0].message.content or ""
                         else:
                             import requests
-                            res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output bare JSON array only.", "stream": False}, timeout=60)
+                            res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output raw JSON object only. No preamble, no backticks.", "stream": False}, timeout=60)
                             if res.status_code != 200:
                                 raise Exception(f"Ollama returned {res.status_code}: {res.text}")
                             llm_out = res.json().get("response", "") or ""
 
                         llm_out = str(llm_out)
-                            
                         if not llm_out.strip():
                             raise Exception("LLM returned an entirely blank string.")
-                        
-                        # Strip markdown code blocks if present
-                        llm_out = re.sub(r'```(?:json)?\s*', '', llm_out)
-                        llm_out = re.sub(r'\s*```', '', llm_out)
                             
-                        # Robust JSON array extraction
-                        start_idx = llm_out.find('[')
-                        end_idx = llm_out.rfind(']')
-                        
-                        if start_idx == -1 or end_idx == -1:
-                            raise Exception(f"Failed to find JSON boundaries in LLM response: {llm_out[:100]}...")
-                            
-                        clean_json = llm_out[start_idx:end_idx+1]
+                        # Robust JSON Extraction (Ignore preambles and markdown blocks)
+                        # Finds the first '{' and the last '}'
+                        match_obj = re.search(r'(\{.*\}|\[.*\])', llm_out, re.DOTALL)
+                        if match_obj:
+                            clean_json = match_obj.group(1)
+                        else:
+                            clean_json = llm_out # Fallback to raw
 
                         def _normalize_json_text(raw_text):
                             txt = raw_text.strip()
+                            # Handle Unicode quotes
                             txt = txt.replace("\u201c", '"').replace("\u201d", '"')
                             txt = txt.replace("\u2018", "'").replace("\u2019", "'")
-                            # Remove trailing commas before object/array close.
+                            # Remove trailing commas
                             txt = re.sub(r",\s*([}\]])", r"\1", txt)
-                            # Quote common bare keys if present.
-                            txt = re.sub(r'([{,]\s*)(id|topics|sentiment)(\s*:)', r'\1"\2"\3', txt)
-                            # Remove any leading/trailing control characters
-                            txt = ''.join(c for c in txt if ord(c) >= 32 or c in '\n\t')
+                            # Quote common bare keys
+                            txt = re.sub(r'([{,]\s*)(id|topics|sentiment|overall_sentiment|annotations)(\s*:)', r'\1"\2"\3', txt)
                             return txt
 
                         annotations = None
-                        parse_attempts = [
-                            clean_json,
-                            _normalize_json_text(clean_json),
-                        ]
+                        parse_attempts = [clean_json, _normalize_json_text(clean_json)]
 
                         for attempt in parse_attempts:
                             try:
@@ -1735,28 +1918,33 @@ with tab_ml_predict:
                                 pass
 
                         if annotations is None:
-                            # Try Python-literal parsing for single-quoted payloads.
-                            try:
-                                literal_obj = ast.literal_eval(_normalize_json_text(clean_json))
-                                if isinstance(literal_obj, list):
-                                    annotations = literal_obj
-                            except Exception:
-                                annotations = None
-
-                        if annotations is None:
                             raise ValueError("Malformed JSON payload from LLM")
                         
-                        for ann in annotations:
+                        # Handle Case: LLM returns just the array instead of the object
+                        if isinstance(annotations, list):
+                            # Self-healing: Wrap the array into the expected dict structure
+                            annotations = {"overall_sentiment": 0.0, "annotations": annotations}
+                            analysis_meta["status"] = "Adaptive Recovery: JSON Array mapped to Object"
+                        
+                        llm_global_score = float(annotations.get("overall_sentiment", 0.0))
+                        llm_ann_list = annotations.get("annotations", [])
+                        
+                        for ann in llm_ann_list:
                             sent_str = ann.get("sentiment", "Neutral")
                             score = 0.0
                             if "positive" in sent_str.lower(): score = 0.5
                             elif "negative" in sent_str.lower(): score = -0.5
                             llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
-                        if llm_sentiments:
+                        
+                        if llm_sentiments or llm_global_score != 0.0:
                             analysis_meta["llm_used"] = True
+                            analysis_meta["llm_global_score"] = llm_global_score
                             analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
                     except Exception as e:
                         st.toast("LLM output format issue detected. Using standard local routing.", icon="⚠️")
+                        with st.expander("🛠️ LLM Debug Trace (Raw Output)", expanded=False):
+                            st.code(llm_out, language="text")
+                            st.error(f"Error: {str(e)}")
                         analysis_meta["engine_label"] = "Standard ML + VADER"
                         analysis_meta["engine_tier"] = "Local"
                         analysis_meta["status"] = "Fallback activated: local routing engine"
@@ -1889,13 +2077,22 @@ with tab_ml_predict:
                     sent_distribution.append({"Sentiment": sent_type, "Count": s_count, "Percentage": s_count / sentiment_total})
                 
             annotated_text = "".join(highlighted_html)
-            return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta
+            
+            # Extract final global sentiment (priority to LLM)
+            final_llm_score = analysis_meta.get("llm_global_score", 0.0)
+            
+            # --- SENTIMENT PROXYING (STABILIZATION) ---
+            # If LLM wasn't used/available, use VADER compound score as a high-quality proxy
+            # This prevents the 'Core Four' models from being blinded to sentiment.
+            if not analysis_meta.get("llm_used"):
+                final_llm_score = analyzer.polarity_scores(text)['compound']
+                analysis_meta["status"] = "Active: VADER Proxy (LLM-Off mode)"
+            
+            return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta, final_llm_score
             
         # Global Model Handling for this Tab
-        model_bundle = load_ml_models()
-        rating_models = model_bundle.get("rating", {})
-        aspect_engine = model_bundle.get("aspect")
-        dealbreakers = model_bundle.get("dealbreakers", {"neg": set(), "pos": set()})
+        # --- TOURNAMENT ANALYZER SETUP ---
+        # Models are loaded dynamically based on A/B selection below.
 
         with st.container():
             if "review_input_text" not in st.session_state:
@@ -1905,11 +2102,16 @@ with tab_ml_predict:
                 st.session_state["review_input_text"] = text
                 st.session_state["review_analyzed"] = False
 
+            # Define callback for text changes to reset state
+            def _reset_analysis_state():
+                st.session_state["review_analyzed"] = False
+
             review_input = st.text_area(
                 "Customer Review Text",
                 height=140,
                 key="review_input_text",
                 placeholder="Paste or type one review, then click Analyze Review. e.g., The food was excellent but the flight was delayed by 3 hours...",
+                on_change=_reset_analysis_state,
             )
 
             st.markdown("**Try sample reviews**")
@@ -2013,6 +2215,12 @@ with tab_ml_predict:
                 help=help_text,
             )
 
+            model_dir = "models_b" if use_llm else "models"
+            model_bundle = load_ml_models(model_dir=model_dir)
+            rating_models = model_bundle.get("rating", {})
+            aspect_engine = model_bundle.get("aspect")
+            dealbreakers = model_bundle.get("dealbreakers", {"neg": set(), "pos": set()})
+
             # 2. Secondary Modifiers - Advanced Settings Expander
             if rating_models:
                 engine_options = list(rating_models.keys())
@@ -2039,49 +2247,60 @@ with tab_ml_predict:
 
             st.write("")
             
-            # 3. Call to Action Button
+            # Run Action
             if st.button("Analyze Review", type="primary", use_container_width=True):
                 st.session_state["review_analyzed"] = True
-            
+
             if st.session_state.get("review_analyzed") and review_input.strip() and rating_models:
-                input_clean = re.sub(r'[^a-z0-9\s]', '', review_input.lower()).strip()
-                _analyzer = get_vader_analyzer()
-                vader_score = _analyzer.polarity_scores(review_input)['compound']
-                
-                # VADER class label
-                if vader_score > 0.05:
-                    vader_class = "Positive"
-                elif vader_score < -0.05:
-                    vader_class = "Negative"
-                else:
-                    vader_class = "Neutral"
-                
-                # Sentence-level VADER features
-                _sentences = re.split(r'[.!?]', review_input)
-                _sent_scores = [_analyzer.polarity_scores(s)['compound'] for s in _sentences if s.strip()]
-                vader_min = min(_sent_scores) if _sent_scores else 0.0
-                vader_max = max(_sent_scores) if _sent_scores else 0.0
-                vader_range = vader_max - vader_min
-                
-                # Dealbreaker flags
-                _words = set(input_clean.split())
-                has_neg_db = 1 if _words & dealbreakers.get("neg", set()) else 0
-                has_pos_db = 1 if _words & dealbreakers.get("pos", set()) else 0
-                
-                # Build the full 5-stream DataFrame expected by the new Pipeline
-                X_input = pd.DataFrame({
-                    "clean_text": [input_clean],
-                    "vader_score": [vader_score],
-                    "vader_class": [vader_class],
-                    "vader_min": [vader_min],
-                    "vader_max": [vader_max],
-                    "vader_range": [vader_range],
-                    "has_neg_dealbreaker": [has_neg_db],
-                    "has_pos_dealbreaker": [has_pos_db]
-                })
+                with st.spinner("Analyzing review logic..."):
+                    # 1. Topic & Sentiment Engine pass (The 'Routing Tags')
+                    # This now also returns the unified global sentiment score if use_llm=True
+                    detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta, llm_integrated_score = extract_aspect_tags(review_input, use_llm=use_llm)
+                    
+                    # --- AI SELF-HEALING FALLBACK ---
+                    # If Smart AI was requested but failed (AI service down), 
+                    # we must swap back to the 'Setup A' (Core Four) models and features.
+                    is_ai_fallback = use_llm and not analysis_meta.get("llm_used", False)
+                    
+                    if is_ai_fallback:
+                        # Re-load the Setup A models (4-feature Core Four)
+                        model_bundle = load_ml_models(model_dir="models")
+                        rating_models = model_bundle.get("rating", {})
+                        benchmarks = model_bundle.get("benchmarks", {})
+                        analysis_meta["status"] = "⚠️ AI Service Down: VADER Fallback"
+                    
+                    st.session_state["last_analyzed_text"] = review_input
+                    
+                    # 2. ML FEATURE ENGINEERING
+                    input_clean = re.sub(r'[^a-z0-9\s]', '', review_input.lower()).strip()
+                    _analyzer = get_vader_analyzer()
+                    
+                    # Pain-Point Detection (vader_min)
+                    _sentences = re.split(r'[.!?]', review_input)
+                    _sent_scores = [_analyzer.polarity_scores(s)['compound'] for s in _sentences if s.strip()]
+                    vader_min = min(_sent_scores) if _sent_scores else 0.0
+                    
+                    # Friction Triggers (has_neg_db)
+                    _words = set(input_clean.split())
+                    has_neg_db = 1 if _words & dealbreakers.get("neg", set()) else 0
+                    
+                    # Final Feature Set Construction
+                    X_input = pd.DataFrame({
+                        "clean_text": [input_clean],
+                        "vader_min": [vader_min],
+                        "has_negative_dealbreaker": [has_neg_db],
+                        "llm_sentiment_score": [llm_integrated_score] 
+                    })
+                    
+                    # --- DYNAMIC FEATURE SELECTION ---
+                    # Only filter if we have a successful AI pass (Setup B models).
+                    # If we are in Fallback (is_ai_fallback) or use_llm is False, use all 4 features.
+                    if use_llm and not is_ai_fallback:
+                        # Unified Mode: High-Nuance AI Mapping (Setup B models)
+                        X_input = X_input[["llm_sentiment_score"]]
                 
                 # --- TOURNAMENT PREDICTIONS ---
-                # Dynamic benchmarks loaded from model metadata
+                # Ensure benchmarks are synchronized with the (potentially swapped) model bundle
                 benchmarks = model_bundle.get("benchmarks", {})
                 
                 all_results = []
@@ -2136,7 +2355,7 @@ with tab_ml_predict:
                     sausage_lines.append(f"• {name.upper()}:\n  {s:.2f} Rating × {base_w:.2f} (Base Acc) × {multiplier:.1f} (Manual) = {s*effective_w:.3f}")
                     weighted_sum += (s * effective_w)
                     total_weight += effective_w
-                
+
                 # DERIVE FINAL TOURNAMENT VALUES
                 consensus_winner = max(categorical_votes, key=categorical_votes.get)
                 continuum_score = weighted_sum / total_weight if total_weight > 0 else 3.0
@@ -2189,6 +2408,15 @@ with tab_ml_predict:
                             Each model's weight is based on its test accuracy — more accurate models have a stronger vote.
                         </div>
                     </div>
+                    <div style='margin-top: 15px;'>
+                        <b style='color: #1f2937; font-size: 0.8rem;'>STEP 3: ACTIVE PREDICTION FEATURES</b><br>
+                        <div style='margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px;'>
+                            {' '.join([f"<span style='background: #f3f4f6; color: #374151; padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 0.75rem; border: 1px solid #d1d5db;'>{col}</span>" for col in X_input.columns])}
+                        </div>
+                        <div style='margin-top: 6px; font-size: 0.7rem; color: #9ca3af;'>
+                            These are the specific data dimensions analyzed by the model committee for this current intelligence mode.
+                        </div>
+                    </div>
                 </div>
                 """
                 
@@ -2204,8 +2432,8 @@ with tab_ml_predict:
                 prediction = active_model.predict(X_input)[0]
                 probabilities = active_model.predict_proba(X_input)[0]
                 
-                # Aspect extraction
-                detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta = extract_aspect_tags(review_input, use_llm=use_llm)
+                # --- ASPECT EXTRACTION RESULTS (from previous engine pass) ---
+                # detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta were populated above.
                 
                 st.divider()
                 st.caption("Results are organized from summary to detail. Start with the verdict card, then open optional detail sections as needed.")
@@ -2538,6 +2766,70 @@ with tab_ml_predict:
                 st.warning("Please enter some text to begin analysis.")
 
 
+with tab_pre_eda:
+    st.markdown("## 📊 Pre-Model EDA (The Raw Data)", help="Raw data truths before any AI intervention.")
+    st.info("These insights examine the raw, un-modeled data to uncover baseline Truths.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**1. Platform Emotional Bias**")
+        st.caption("Mobile users are often more positive than Desktop users (+0.2★). This block plots your currently filtered data.")
+        platform_agg = filtered.dropna(subset=['published_platform']).groupby("published_platform")["rating"].mean().reset_index()
+        fig_platform = px.bar(platform_agg, x="published_platform", y="rating", color="published_platform",
+                              title="Average Rating by Platform", text_auto=".2f")
+        fig_platform.update_layout(hovermode='closest')
+        st.plotly_chart(fig_platform, use_container_width=True)
+        
+    with col2:
+        st.markdown("**2. The Review Length Paradox**")
+        st.caption("Extremes (1★ and 5★) often contain the longest reviews. Let's look at average text length vs rating.")
+        filtered_len = filtered.copy()
+        filtered_len['text_length'] = filtered_len['text'].fillna("").apply(len)
+        len_agg = filtered_len.groupby("rating")["text_length"].mean().reset_index()
+        fig_len = px.bar(len_agg, x="rating", y="text_length", color="rating", 
+                             title="Average Character Count by Star Rating", text_auto=".0f")
+        fig_len.update_layout(xaxis=dict(dtick=1), hovermode='closest')
+        st.plotly_chart(fig_len, use_container_width=True)
+        
+    st.markdown("**3. Rating Distribution (The Smote Justification)**")
+    st.caption("Notice the massive spike in 5-star reviews? Without artificially re-balancing this (undersampling 5s, oversampling 2s), an AI would lazily guess '5 Stars' every time.")
+    fig_dist = px.histogram(filtered, x="rating", title="Rating Distribution Data Gap", nbins=5, color="rating", text_auto=True)
+    fig_dist.update_layout(xaxis_title="Star Rating", yaxis_title="Review Count", hovermode='closest', xaxis=dict(dtick=1))
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+with tab_post_eda:
+    st.markdown("## 🧠 Post-Model AI EDA (The Algorithm's Discoveries)", help="Insights uncovered using VADER and Dealbreaker algorithms.")
+    st.info("Now we look at the 'Hidden' data—Sentimental analysis mapped against physical Star Ratings.")
+    
+    # We analyze the entire dataset unconditionally to show the statistical maximum. Wrapped in cache down below.
+    with st.spinner("Calculating VADER & Cluster segments for EDA..."):
+        df_sample = get_enriched_eda_data(filtered)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**1. The Discrepancy Matrix**")
+        st.caption("Highlights 'Confused Promoters' (1★ but High Vader) and 'Sarcastic Detractors' (5★ but Low Vader).")
+        
+        fig_matrix = px.scatter(df_sample, x="rating", y="vader_score", color="segment", 
+                                color_discrete_map={"Sarcastic Detractors": "#ef4444", "Confused Promoters": "#3b82f6", "Expected Correlation": "#9ca3af"},
+                                title="VADER vs Rating Matrix", opacity=0.6)
+        fig_matrix.add_hline(y=0, line_dash="dash", line_color="black")
+        fig_matrix.update_layout(hovermode='closest', xaxis=dict(dtick=1))
+        st.plotly_chart(fig_matrix, use_container_width=True)
+
+    with col2:
+        st.markdown("**2. Dealbreaker Gravity Effect**")
+        st.caption("Visualizing the algorithmic anchor. Notice how the average rating plummets when our AI detects a dealbreaker.")
+        db_agg = df_sample.groupby("has_negative_dealbreaker")["rating"].mean().reset_index()
+        db_agg["has_negative_dealbreaker"] = db_agg["has_negative_dealbreaker"].map({True: "Dealbreaker Present", False: "Clean Text"})
+        
+        fig_db = px.bar(db_agg, x="has_negative_dealbreaker", y="rating", color="has_negative_dealbreaker", text_auto='.2f',
+                        title="Average Rating Modifier", color_discrete_sequence=["#e11d48", "#10b981"])
+        fig_db.update_layout(hovermode='closest')
+        st.plotly_chart(fig_db, use_container_width=True)
+
+
+
 with tab_insights:
     st.markdown("## 🧠 Macro Review Insights", help="This tab simulates scoring a dataset with the loaded multi-model consensus engine.")
     st.markdown("Execute the **Consensus Sentiment Engine** and **Actionable Tag Extraction** across a randomized sample of your *currently filtered dataset*. This leverages the same ensemble model logic to reveal macro trends, identify rating vs. sentiment gaps, and diagnose fleet health.")
@@ -2651,12 +2943,14 @@ with tab_insights:
                     model_preds = [float(m.predict(X_sample)[0]) for m in rating_models.values()]
                     consensus_score = sum(model_preds) / len(model_preds)
                     divergence = np.std(model_preds) if len(model_preds) > 1 else 0
+                    exec_error = None
                 except Exception as e:
                     consensus_score = 3.0
                     divergence = 0.0
+                    exec_error = str(e)
                 
                 # 3. Fast Routing Tags (Always use local logic for batch to save time/cost)
-                detected_tags, _, _, _, _ = extract_aspect_tags(rv_text, use_llm=False)
+                detected_tags, _, _, _, _, _ = extract_aspect_tags(rv_text, use_llm=False)
                 
                 results.append({
                     "text_snippet": rv_text[:60] + "..." if len(rv_text) > 60 else rv_text,
@@ -2665,10 +2959,12 @@ with tab_insights:
                     "vader_polarity": vader_score,
                     "divergence": divergence,
                     "_engine_tags": detected_tags.copy(), # Hidden column for chart rendering
-                    "routing_tags": detected_tags
+                    "routing_tags": detected_tags,
+                    "execution_error": exec_error
                 })
                 
-                progress_bar.progress((index + 1) / safe_size)
+                if index % max(1, safe_size // 20) == 0:
+                    progress_bar.progress((index + 1) / safe_size)
                 
             progress_bar.empty()
             
