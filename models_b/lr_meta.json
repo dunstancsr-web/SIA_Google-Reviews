@@ -4,6 +4,7 @@
   "display_name": "Logistic Regression (B)",
   "trained_at": "2026-04-04T19:30:41.893294",
   "feature_streams": 1,
+  "training_time_s": 0.01,
   "features": [
     "llm_sentiment_score"
   ]
