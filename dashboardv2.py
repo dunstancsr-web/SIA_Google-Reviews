@@ -3022,14 +3022,12 @@ with tab_ml_predict:
                     
                     # --- AI SELF-HEALING FALLBACK ---
                     # If Smart AI was requested but failed (AI service down), 
-                    # we must swap back to the 'Setup A' (Core Four) models and features.
+                    # we use the VADER Proxy provided by extract_aspect_tags.
                     is_ai_fallback = use_llm and not analysis_meta.get("llm_used", False)
                     
                     if is_ai_fallback:
-                        # Re-load the Setup A models (4-feature Core Four)
-                        model_bundle = load_ml_models(model_dir="models")
-                        rating_models = model_bundle.get("rating", {})
-                        benchmarks = model_bundle.get("benchmarks", {})
+                        # Since we already load 'models/' by default, no need to reload.
+                        # The extract_aspect_tags function has already filled the VADER proxy.
                         analysis_meta["status"] = "⚠️ AI Service Down: VADER Fallback"
                     
                     st.session_state["last_analyzed_text"] = review_input
