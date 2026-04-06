@@ -143,10 +143,6 @@ def render_star_rating(score, color="#ca8a04"):
 def get_vader_analyzer():
     return SentimentIntensityAnalyzer()
 
-# 2. Page Configuration
-st.set_page_config(page_title="Self‑Service Data Hub", page_icon="SIA", layout="wide")
-
-
 st.set_page_config(page_title="Self‑Service Data Hub", page_icon="SIA", layout="wide")
 
 # Global font styling (Streamlit UI)
@@ -307,16 +303,17 @@ st.markdown(
             opacity: 0;
             transition: opacity 0.15s ease;
             position: absolute;
-            left: 300px;
-            bottom: calc(100% - 20px);
+            left: 50%;
+            bottom: calc(100% + 10px);
+            transform: translateX(-50%);
             z-index: 1000;
-            font-size: 30px;
+            font-size: 1.2rem;
             line-height: 1.35;
             color: #6b6b6b;
             background: #ffffff;
             border: 1px solid #d9d9d9;
             border-radius: 8px;
-            padding: 12px 14px;
+            padding: 10px 12px;
             white-space: nowrap;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
         }
@@ -324,6 +321,36 @@ st.markdown(
             visibility: visible;
             opacity: 1;
         }
+        
+        /* Mobile Responsiveness Media Queries */
+        @media (max-width: 768px) {
+            [data-baseweb="tab-list"] button,
+            [data-baseweb="tab-list"] [role="tab"],
+            [data-baseweb="tab"] {
+                font-size: 1rem !important;
+                padding: 0.5rem 1rem !important;
+                min-height: 3rem !important;
+            }
+            [data-baseweb="tab-list"] button *,
+            [data-baseweb="tab-list"] [role="tab"] *,
+            [data-baseweb="tab"] * {
+                font-size: 1rem !important;
+            }
+            .verdict-score-big {
+                font-size: 2.5rem !important;
+            }
+            .stDownloadButton button {
+                font-size: 1rem !important;
+                padding: 0.8rem 1.2rem !important;
+            }
+            .title-hover-tooltip, .sia-popover {
+                width: 90vw !important;
+                left: 5vw !important;
+                transform: none !important;
+                white-space: normal !important;
+            }
+        }
+        
         .stButton button:active {
             transform: scale(0.98);
         }
@@ -385,11 +412,53 @@ st.markdown(
             display: block;
         }
         #voting-toggle:checked ~ label[for="voting-toggle"] {
-            opacity: 0.5;
+            opacity: 0.7;
         }
         label[for="voting-toggle"]:hover {
             opacity: 0.8 !important;
         }
+        
+        /* Executive Insight Toggle (Overview Tab) */
+        .insight-toggle-panel {
+            display: none;
+            margin-top: 10px;
+            animation: fadeIn 0.4s ease-out;
+            perspective: 1000px;
+        }
+
+        #insight-toggle-checkbox:checked ~ .insight-toggle-panel {
+            display: block !important;
+        }
+
+        /* Improved toggle label styling with reliable selector */
+        #insight-toggle-checkbox:checked ~ div label[for="insight-toggle-checkbox"],
+        #insight-toggle-checkbox:checked ~ .insight-toggle-panel-trigger label,
+        #macro-toggle-checkbox:checked ~ div label[for="macro-toggle-checkbox"] {
+            opacity: 1 !important;
+            border-style: solid !important;
+            border-color: #1e40af !important;
+            background: rgba(30, 64, 175, 0.1) !important;
+            color: #1e40af !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+
+        #macro-toggle-checkbox:checked ~ .macro-toggle-panel {
+            display: block !important;
+        }
+
+        .macro-toggle-panel {
+            display: none;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        label[for="insight-toggle-checkbox"]:hover,
+        label[for="macro-toggle-checkbox"]:hover {
+            opacity: 1 !important;
+            background: rgba(30, 64, 175, 0.08) !important;
+            transform: translateY(-1px);
+            border-color: #1e40af !important;
+        }
+        
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(-8px); }
             to { opacity: 1; transform: translateY(0); }
@@ -847,23 +916,70 @@ def generate_dataset_overview(df: pd.DataFrame, time_series: pd.DataFrame, model
     import os
     
     if len(df) == 0:
-        return "📊 **Dataset Overview:** No data available with current filters."
+        return json.dumps({"summary": "No data available with current filters.", "top_insight": {"finding": "Dataset is empty.", "recommendation": "Adjust filters to include more reviews.", "urgency": "Low"}})
     
-    # Create dataset summary for AI to contextualize
-    total_reviews = len(df)
-    avg_rating = df["rating"].mean()
-    negative_pct = df["rating"].between(1, 2).mean() * 100
-    positive_pct = df["rating"].between(4, 5).mean() * 100
-    date_range = f"{df['published_date'].min().strftime('%b %Y')} to {df['published_date'].max().strftime('%b %Y')}" if "published_date" in df.columns else "Unknown period"
-    platforms = ", ".join(df["published_platform"].value_counts().head(3).index.tolist()) if df["published_platform"].notna().any() else "Multiple platforms"
+    # --- DATA LAYER 1: TRENDS ---
     trend_summary = build_at_a_glance_trend_summary(time_series)
     
-    data_summary = (
-        f"Reviews: {total_reviews}, Avg Rating: {avg_rating:.2f}, Negative: {negative_pct:.0f}%, "
-        f"Positive: {positive_pct:.0f}%, Period: {date_range}, Platforms: {platforms}, {trend_summary}"
-    )
+    # --- DATA LAYER 2: SENTIMENT MIX ---
+    pos_pct = df["rating"].between(4, 5).mean() * 100
+    neu_pct = df["rating"].eq(3).mean() * 100
+    neg_pct = df["rating"].between(1, 2).mean() * 100
+    avg_rating = df["rating"].mean()
     
-    prompt = f"Briefly describe what this Singapore Airlines review dataset shows (1-2 sentences). Context: {data_summary}"
+    # --- DATA LAYER 3: CHANNEL MIX (Google, TripAdvisor, Others) ---
+    google_mask = df["published_platform"].str.contains("Google", case=False, na=False)
+    trip_mask = df["published_platform"].str.contains("TripAdvisor", case=False, na=False)
+    
+    google_pct = google_mask.mean() * 100
+    trip_pct = trip_mask.mean() * 100
+    others_pct = 100 - google_pct - trip_pct
+    
+    channel_mix = {
+        "Google": f"{google_pct:.1f}%",
+        "TripAdvisor": f"{trip_pct:.1f}%",
+        "Others": f"{others_pct:.1f}%"
+    }
+    
+    # --- DATA LAYER 4: PREDICTIVE DIAGNOSTICS ---
+    pain_points = df["has_negative_dealbreaker"].sum()
+    pain_point_ratio = (pain_points / len(df)) * 100 if len(df) > 0 else 0
+    mean_ai_sentiment = df["llm_sentiment_score"].mean() if "llm_sentiment_score" in df.columns else 0
+    
+    date_range = f"{df['published_date'].min().strftime('%b %Y')} to {df['published_date'].max().strftime('%b %Y')}" if "published_date" in df.columns else "Unknown period"
+    
+    data_context = {
+        "Volume": len(df),
+        "Period": date_range,
+        "Trend": trend_summary,
+        "Ratings": {
+            "Average": round(avg_rating, 2), 
+            "Pos%": f"{pos_pct:.1f}%", 
+            "Neu%": f"{neu_pct:.1f}%", 
+            "Neg%": f"{neg_pct:.1f}%"
+        },
+        "Channel_Mix": channel_mix,
+        "Diagnostics": {
+            "Pain_Point_Ratio": f"{pain_point_ratio:.1f}%",
+            "AI_Contextual_Sentiment": round(mean_ai_sentiment, 2)
+        }
+    }
+    
+    prompt = (
+        f"System Role: You are a Chief Strategy Officer for Singapore Airlines.\n\n"
+        f"Task: Analyze the provided multi-layer dataset context and generate a high-density executive briefing.\n\n"
+        f"Data Context:\n{json.dumps(data_context, indent=2)}\n\n"
+        f"Output Requirements: Output ONLY a single valid JSON object. No preamble, no markdown blocks, no explanation.\n\n"
+        f"JSON Schema:\n"
+        f"{{\n"
+        f"  \"summary\": \"A 2-sentence executive brief capturing the overall mood and strategic health of the dataset (keep it high-level, no markdown, no JSON brackets).\",\n"
+        f"  \"top_insight\": {{\n"
+        f"    \"finding\": \"The most critical trend or anomaly identified in the data.\",\n"
+        f"    \"recommendation\": \"A clear, actionable strategic step for leadership.\",\n"
+        f"    \"urgency\": \"Low\" | \"Medium\" | \"High\"\n"
+        f"  }}\n"
+        f"}}"
+    )
     
     # Route to selected model
     groq_api_key = os.environ.get("GROQ_API_KEY")
@@ -872,13 +988,256 @@ def generate_dataset_overview(df: pd.DataFrame, time_series: pd.DataFrame, model
         if groq_api_key:
             return _generate_groq_insight(prompt, groq_api_key)
         else:
-            return "📊 **Dataset Overview:** Groq not configured. Using Ollama...\n" + _generate_ollama_insight(prompt)
+            return _generate_ollama_insight(prompt)
     elif model_choice == "ollama":
         return _generate_ollama_insight(prompt)
     else:  # auto
         if groq_api_key:
             return _generate_groq_insight(prompt, groq_api_key)
         return _generate_ollama_insight(prompt)
+
+def render_overview_insight(output):
+    """Renders the AI output with robust 'nuclear' self-healing parsing and premium UI."""
+    import html
+    data = None
+    
+    # Clean output string to handle markdown blocks and preamble
+    output_str = str(output).strip()
+    
+    # Handle if output is already a dict
+    if isinstance(output, dict):
+        data = output
+    else:
+        try:
+            # 1. Nuclear Extraction: Find the outermost braces
+            match = re.search(r"(\{.*\})", output_str, re.DOTALL)
+            if match:
+                clean_str = match.group(1).strip()
+                
+                # 2. Advanced Self-Healing for common LLM JSON errors
+                # Fix missing commas between key-value pairs (more precise)
+                clean_str = re.sub(r'("|\')\s*\n\s*("|\')', r'\1,\2', clean_str)
+                # Fix trailing commas
+                clean_str = re.sub(r',\s*\}', '}', clean_str)
+                # Ensure double quotes for keys (ast.literal_eval handles single quotes, but json.loads doesn't)
+                
+                # 3. Try standard JSON first
+                try:
+                    data = json.loads(clean_str)
+                except:
+                    # 4. Try ast.literal_eval for single-quoted JSON
+                    import ast
+                    try:
+                        data = ast.literal_eval(clean_str)
+                    except Exception as e:
+                        # 5. Last resort: manual key-value extraction for essential fields
+                        found_data = {}
+                        for key in ["summary", "finding", "recommendation", "urgency"]:
+                            kv_match = re.search(rf'["\']{key}["\']\s*:\s*["\'](.*?)["\']', clean_str, re.DOTALL)
+                            if kv_match:
+                                found_data[key] = kv_match.group(1)
+                        
+                        # Pack into consistent structure
+                        if "summary" in found_data:
+                            data = {
+                                "summary": found_data.get("summary"),
+                                "top_insight": {
+                                    "finding": found_data.get("finding", "Analysis synthesized from data."),
+                                    "recommendation": found_data.get("recommendation", "Adjust filters for more granular views."),
+                                    "urgency": found_data.get("urgency", "Medium")
+                                }
+                            }
+        except Exception:
+            pass
+
+    # Safety: If parsing failed completely, use regex-lite extraction from raw string
+    if not data or not isinstance(data, dict):
+        s_match = re.search(r'("summary"|\'summary\'):\s*["\'](.*?)["\']', output_str, re.DOTALL)
+        if s_match:
+            data = {"summary": s_match.group(2)}
+        else:
+            # Absolute fallback: show raw text in a nice but non-premium box
+            st.info(f"✨ AI ANALYSIS\n\n{output_str[:1500]}")
+            return
+
+    # Extract with defaults
+    summary = data.get("summary", "AI synthesis for the current dataset is ready.")
+    insight = data.get("top_insight", {})
+    finding = insight.get("finding", data.get("finding", "Data patterns analyzed."))
+    rec = insight.get("recommendation", data.get("recommendation", "No specific recommendation needed."))
+    urgency = insight.get("urgency", data.get("urgency", "Low"))
+
+    # UI Styling for Priority
+    u_data = {
+        "High": ("#ffeeee", "#c1272d", "🔴 PRIORITY: HIGH"),
+        "Medium": ("#fffbeb", "#d97706", "🟡 PRIORITY: MEDIUM"),
+        "Low": ("#f0fdf4", "#15803d", "🟢 PRIORITY: LOW")
+    }
+    bg, p_color, label = u_data.get(urgency, u_data["Low"])
+
+    # ESCAPE HTML & SANITIZE for f-string and UI safety
+    s_summary = html.escape(str(summary))
+    s_finding = html.escape(str(finding))
+    s_rec = html.escape(str(rec))
+    s_label = html.escape(str(label))
+
+    # Construct HTML with placeholders to avoid f-string curly brace conflicts with CSS
+    html_template = """<input type="checkbox" id="insight-toggle-checkbox" style="display: none;">
+<div style="background-color: #f0f7ff; padding: 1.25rem 1.5rem; border: 1px solid #e1effe; border-radius: 12px; margin-bottom: 0px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02); transition: all 0.3s ease;">
+<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 0.6rem;">
+<div style="background-color: #dbeafe; color: #1e40af; font-size: 0.65rem; font-weight: 800; padding: 3px 8px; border-radius: 4px; letter-spacing: 0.05em; border: 1px solid #bfdbfe; display: inline-flex; align-items: center; gap: 4px;">
+<span>✨</span> AI ANALYSIS
+</div>
+<div style="font-size: 0.7rem; font-weight: 800; color: #64748b; letter-spacing: 0.1em; text-transform: uppercase;">EXECUTIVE BRIEFING</div>
+</div>
+<div style="font-size: 1.1rem; font-weight: 500; color: #1e293b; line-height: 1.5; font-family: 'Inter', system-ui, sans-serif;">{summary}</div>
+<label for="insight-toggle-checkbox" style="display: inline-block; margin-top: 15px; font-size: 0.75rem; font-weight: 700; color: #1e40af; cursor: pointer; padding: 6px 14px; border: 1px dashed #1e40af60; border-radius: 8px; transition: all 0.2s; background: rgba(255,255,255,0.5);">
+🔍 View Critical Strategic Insight (click to reveal)
+</label>
+</div>
+<div class="insight-toggle-panel">
+<div style="background-color: #ffffff; border: 1px solid #eef2f6; border-radius: 12px; padding: 1.5rem; margin-top: 12px; box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.06); border-left: 5px solid {priority_color};">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; gap: 0.5rem;">
+<h4 style="margin: 0; color: #334155; font-size: 0.9rem; font-weight: 700; letter-spacing: -0.01em;">DETAILED ANALYSIS</h4>
+<span style="background-color: {priority_bg}; color: {priority_color}; font-size: 0.7rem; font-weight: 800; padding: 5px 14px; border-radius: 999px; border: 1px solid {priority_color}25;">{priority_label}</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 1.5rem;">
+<div style="flex: 1.3; min-width: 250px; padding-right: 1.5rem; border-right: 1px solid #f1f5f9;">
+<div style="font-size: 0.7rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 0.5rem; letter-spacing: 0.05em;">💡 Recommendation</div>
+<div style="font-size: 1.05rem; font-weight: 600; color: #0f172a; line-height: 1.55;">{recommendation}</div>
+</div>
+<div style="flex: 1; min-width: 250px; background-color: #f8fafc; padding: 1.25rem; border-radius: 12px; border: 1px solid #f1f5f9;">
+<div style="font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.4rem; letter-spacing: 0.05em;">🔍 Contextual Finding</div>
+<div style="font-size: 0.95rem; font-weight: 500; color: #334155; line-height: 1.5;">{finding}</div>
+</div>
+</div>
+</div>
+</div>"""
+    # Safe rendering without f-string collisions
+    rendered_html = html_template.format(
+        summary=s_summary,
+        recommendation=s_rec,
+        finding=s_finding,
+        priority_color=p_color,
+        priority_bg=bg,
+        priority_label=s_label
+    )
+    
+    st.markdown(rendered_html, unsafe_allow_html=True)
+
+def generate_macro_executive_summary(batch_stats: dict, model_choice: str = "auto") -> str:
+    """Provides a high-density strategic summary for the Macro engine batch results."""
+    import os
+    
+    prompt = (
+        f"System Role: You are a Lead CX Analyst at Singapore Airlines.\n\n"
+        f"Task: Analyze the aggregate results of an ensemble ML sentiment processing batch and provide an executive 'So What?' summary.\n\n"
+        f"Batch Context:\n{json.dumps(batch_stats, indent=2)}\n\n"
+        f"Output Requirements: Output ONLY a single valid JSON object. No preamble, no markdown, no explanation.\n\n"
+        f"JSON Schema:\n"
+        f"{{\n"
+        f"  \"summary\": \"A 2-sentence macro synthesis of the batch health (no markdown, no quotes).\",\n"
+        f"  \"top_insight\": {{\n"
+        f"    \"finding\": \"The most significant trend or anomaly in this specific batch.\",\n"
+        f"    \"recommendation\": \"A strategic action based on these macro patterns.\",\n"
+        f"    \"urgency\": \"Low\" | \"Medium\" | \"High\"\n"
+        f"  }}\n"
+        f"}}"
+    )
+    
+    groq_api_key = os.environ.get("GROQ_API_KEY")
+    if model_choice == "groq" and groq_api_key:
+        return _generate_groq_insight(prompt, groq_api_key)
+    elif model_choice == "ollama":
+        return _generate_ollama_insight(prompt)
+    else:
+        if groq_api_key:
+            return _generate_groq_insight(prompt, groq_api_key)
+        return _generate_ollama_insight(prompt)
+
+def render_macro_executive_summary(output):
+    """Renders the AI Macro output with premium styling for the Insights tab."""
+    import html
+    data = None
+    output_str = str(output).strip()
+    
+    if isinstance(output, dict):
+        data = output
+    else:
+        try:
+            match = re.search(r"(\{.*\})", output_str, re.DOTALL)
+            if match:
+                clean_str = match.group(1).strip()
+                try:
+                    data = json.loads(clean_str)
+                except:
+                    import ast
+                    data = ast.literal_eval(clean_str)
+        except Exception:
+            pass
+
+    if not data or not isinstance(data, dict):
+        st.info(f"✨ MACRO SUMMARY\n\n{output_str[:1500]}")
+        return
+
+    summary = data.get("summary", "Macro synthesis for the processed batch is ready.")
+    insight = data.get("top_insight", {})
+    finding = insight.get("finding", "Patterns detected in ensemble results.")
+    rec = insight.get("recommendation", "Adjust operational focuses based on batch feedback.")
+    urgency = insight.get("urgency", "Medium")
+
+    u_data = {
+        "High": ("#fef2f2", "#dc2626", "🔴 PRIORITY: HIGH"),
+        "Medium": ("#fffbeb", "#d97706", "🟡 PRIORITY: MEDIUM"),
+        "Low": ("#f0fdf4", "#16a34a", "🟢 PRIORITY: LOW")
+    }
+    bg, p_color, label = u_data.get(urgency, u_data["Medium"])
+
+    s_summary = html.escape(str(summary))
+    s_finding = html.escape(str(finding))
+    s_rec = html.escape(str(rec))
+    s_label = html.escape(str(label))
+
+    html_template = """<input type="checkbox" id="macro-toggle-checkbox" style="display: none;">
+<div style="background-color: #f8fafc; padding: 1.25rem 1.5rem; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); transition: all 0.3s ease;">
+<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 0.6rem;">
+<div style="background-color: #f1f5f9; color: #475569; font-size: 0.65rem; font-weight: 800; padding: 3px 8px; border-radius: 4px; letter-spacing: 0.05em; border: 1px solid #e2e8f0; display: inline-flex; align-items: center; gap: 4px;">
+<span>🧠</span> MACRO SYNTHESIS
+</div>
+<div style="font-size: 0.7rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.1em; text-transform: uppercase;">BATCH INTELLIGENCE</div>
+</div>
+<div style="font-size: 1.05rem; font-weight: 500; color: #334155; line-height: 1.5; font-family: 'Inter', system-ui, sans-serif;">{summary}</div>
+<label for="macro-toggle-checkbox" style="display: inline-block; margin-top: 15px; font-size: 0.75rem; font-weight: 700; color: #475569; cursor: pointer; padding: 6px 14px; border: 1px dashed #94a3b860; border-radius: 8px; transition: all 0.2s; background: rgba(255,255,255,0.5);">
+📊 View Strategic Breakdown (click to reveal)
+</label>
+</div>
+<div class="macro-toggle-panel" id="macro-panel">
+<div style="background-color: #ffffff; border: 1px solid #f1f5f9; border-radius: 12px; padding: 1.5rem; margin-top: -15px; margin-bottom: 25px; box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.04); border-left: 5px solid {priority_color};">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; gap: 0.5rem;">
+<h4 style="margin: 0; color: #475569; font-size: 0.9rem; font-weight: 700; letter-spacing: -0.01em;">STRATEGIC RECOMMENDATION</h4>
+<span style="background-color: {priority_bg}; color: {priority_color}; font-size: 0.7rem; font-weight: 800; padding: 4px 12px; border-radius: 999px; border: 1px solid {priority_color}20;">{priority_label}</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 1.5rem;">
+<div style="flex: 1; min-width: 280px; padding-right: 1.5rem; border-right: 1px solid #f1f5f9;">
+<div style="font-size: 0.7rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 0.5rem; letter-spacing: 0.05em;">💡 Top Strategic Step</div>
+<div style="font-size: 1.05rem; font-weight: 600; color: #1e293b; line-height: 1.5;">{recommendation}</div>
+</div>
+<div style="flex: 1; min-width: 250px; background-color: #f8fafc; padding: 1.25rem; border-radius: 12px;">
+<div style="font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.4rem; letter-spacing: 0.05em;">🔍 Patterns Discovery</div>
+<div style="font-size: 0.95rem; font-weight: 500; color: #475569; line-height: 1.5;">{finding}</div>
+</div>
+</div>
+</div>
+</div>"""
+    
+    st.markdown(html_template.format(
+        summary=s_summary,
+        recommendation=s_rec,
+        finding=s_finding,
+        priority_color=p_color,
+        priority_bg=bg,
+        priority_label=s_label
+    ), unsafe_allow_html=True)
 
 def generate_chart_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: str) -> str:
     """Generate an insight about the chart data."""
@@ -889,7 +1248,7 @@ def generate_chart_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: 
         max_val = df.groupby(x_col, dropna=True)[y_col].agg(agg_label).max()
         min_val = df.groupby(x_col, dropna=True)[y_col].agg(agg_label).min()
         diff = max_val - min_val
-        return f"💡 **Insight:** There's a {diff:.2f} difference between the highest and lowest {agg_label} values across categories."
+        return f"💡 **Insight:** There's a {diff:.1f} difference between the highest and lowest {agg_label} values across categories."
 
 def format_column_with_type(col: str, df: pd.DataFrame) -> str:
     """Format column name with data type icon."""
@@ -920,11 +1279,18 @@ def generate_ai_insight(df: pd.DataFrame, x_col: str, y_col: str, agg_label: str
         summary = f"{agg_label.capitalize()} of {y_col} by {x_col}"
         grouped = df.groupby(x_col, dropna=True)[y_col].agg(agg_label).sort_values(ascending=False)
     
-    # Limit to top 10 items to keep prompt small
-    data_desc = grouped.head(10).to_dict()
+    # Round values to 1 decimal place (1dp) for cleaner presentation
+    data_desc = grouped.head(10).round(1).to_dict()
     
-    # Shorter, simpler prompt to reduce token count
-    prompt = f"Data: {data_desc}. One insight about '{summary}' in airline reviews (1-2 sentences)."
+    # Structured JSON prompt for executive insights
+    prompt = (
+        f"You are a Senior Customer Experience (CX) Analyst for Singapore Airlines. "
+        f"DATA CONTEXT: The user is viewing a chart where the X-axis represents '{x_col}' and the Y-axis represents '{y_col}' (aggregated by {agg_label}). "
+        f"DATASET SUMMARY (Top 10): {data_desc}. "
+        f"Analyze the relationship between these specific variables and provide a SINGLE structured JSON object (not an array). "
+        f"Schema: {{'finding': '1-sentence data observation about the trend seen in these axes', 'recommendation': '1-sentence actionable business recommendation based on this finding', 'urgency': 'Low'|'Medium'|'High'}}. "
+        f"Output ONLY the raw JSON. No preamble, no explanations, no markdown blocks. Focus on impact and precision."
+    )
     
     # Route to selected model
     groq_api_key = os.environ.get("GROQ_API_KEY")
@@ -968,10 +1334,22 @@ def _generate_groq_insight(prompt: str, api_key: str) -> str:
                 {"role": "user", "content": prompt}
             ],
             model="llama-3.1-8b-instant",  # Fast, free tier model
-            max_tokens=100,  # Reduced to avoid token limits
+            max_tokens=250,  # Increased slightly for JSON overhead
+            temperature=0,   # Set to 0 for deterministic output
         )
         insight_text = message.choices[0].message.content.strip()
-        return f"✨ **AI Insight (Groq):** {insight_text}"
+        
+        # Robust JSON extraction
+        try:
+            # Find the first { and the last }
+            match_obj = re.search(r'(\{.*\}|\[.*\])', insight_text, re.DOTALL)
+            if match_obj:
+                clean_json = match_obj.group(1)
+                import json
+                return json.loads(clean_json)
+            return insight_text # Fallback to raw text if no JSON found
+        except:
+            return insight_text # Fallback to raw text
     except Exception as e:
         error_msg = str(e)
         # Show more of the error for debugging
@@ -1004,8 +1382,19 @@ def _generate_ollama_insight(prompt: str) -> str:
         
         if response.status_code == 200:
             result = response.json()
-            insight_text = result.get('response', 'No insight generated').strip()
-            return f"✨ **AI Insight (Ollama):** {insight_text}"
+            raw_text = result.get("response", "").strip()
+            
+            # Robust JSON extraction
+            try:
+                # Find the first { and the last }
+                import json
+                match_obj = re.search(r'(\{.*\}|\[.*\])', raw_text, re.DOTALL)
+                if match_obj:
+                    clean_json = match_obj.group(1)
+                    return json.loads(clean_json)
+                return raw_text # Fallback to raw text
+            except:
+                return raw_text # Fallback
         else:
             return "💡 **AI Insight:** Ollama API error. Ensure Ollama is running: `ollama serve`"
     
@@ -1014,7 +1403,7 @@ def _generate_ollama_insight(prompt: str) -> str:
     except requests.exceptions.Timeout:
         return "💡 **AI Insight:** Ollama timeout. Model may still be loading."
     except Exception as e:
-        return f"💡 **AI Insight:** Error ({str(e)[:40]})"
+        return f"💡 **AI Insight:** Ollama error. {str(e)[:100]}. Make sure `ollama serve` is running."
 
 try:
     from wordcloud import WordCloud, STOPWORDS
@@ -1248,8 +1637,274 @@ time_series = (
     .reset_index()
 )
 
-tab_ml_predict, tab_overview, tab_explore, tab_export, tab_insights = st.tabs(
-    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export", "🧠 Macro Insights"]
+
+# ==========================================
+# 🧠 CORE ML UTILITIES & TAXONOMY (GLOBAL)
+# ==========================================
+GLOBAL_MODELS = load_ml_models()
+
+ASPECT_TAXONOMY = {
+    "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
+    "Seat & Comfort": ["seat", "comfort", "legroom", "recline", "space", "cramped", "narrow", "sleep", "bed", "aisle", "window", "sore", "uncomfortable"],
+    "Staff & Service": ["crew", "staff", "attendant", "steward", "stewardess", "rude", "friendly", "polite", "helpful", "service", "smile", "ignored", "professional", "attendants"],
+    "Flight Punctuality": ["delay", "delayed", "late", "wait", "cancel", "cancelled", "hours", "schedule", "missed", "connection", "waiting"],
+    "Baggage Handling": ["baggage", "bag", "luggage", "lost", "belt", "claim", "carousel", "damaged"],
+    "Inflight Entertainment": ["wifi", "internet", "movie", "screen", "krisworld", "tv", "entertainment", "monitor", "headphone", "movies"],
+    "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment", "error", "counter", "boarding", "ticket", "tickets"]
+}
+
+def extract_aspect_tags(text, use_llm=True):
+    analyzer = get_vader_analyzer()
+    # Split text keeping delimiters to reconstruct original text
+    segments = re.split(r'([.!?\n]+)', text)
+    analysis_meta = {
+        "engine_label": "Standard ML + VADER",
+        "engine_tier": "Local",
+        "status": "Using local routing engine",
+        "llm_attempted": False,
+        "llm_used": False,
+        "proxy_mode": not use_llm, 
+    }
+    
+    # --- CONTEXT-AWARE LLM UPGRADE ---
+    llm_sentiments = {} # Dictionary mapping segment index -> (topics_list, sentiment_score)
+    
+    model_choice = st.session_state.get("selected_ai_model", "auto")
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    use_groq = (model_choice == "groq" and api_key) or (model_choice == "auto" and api_key)
+    use_ollama = (model_choice == "ollama") or (model_choice == "auto" and not api_key)
+    
+    if use_llm and (use_groq or use_ollama):
+        analysis_meta["llm_attempted"] = True
+        if use_groq:
+            analysis_meta["engine_label"] = "Groq Hybrid AI"
+            analysis_meta["engine_tier"] = "Cloud"
+            analysis_meta["status"] = "Using Groq for Hybrid Nuance Mapping"
+        elif use_ollama:
+            analysis_meta["engine_label"] = "Ollama Hybrid AI"
+            analysis_meta["engine_tier"] = "Local LLM"
+            analysis_meta["status"] = "Using Ollama for Hybrid Nuance Mapping"
+
+        valid_sentences = []
+        for idx, seg in enumerate(segments):
+            if seg.strip() and not re.fullmatch(r'[.!?\n]+', seg):
+                words = set(re.findall(r'\b\w+\b', seg.lower()))
+                if words:
+                    valid_sentences.append({"id": idx, "text": seg.strip()})
+                    
+        if valid_sentences:
+            prompt = (
+                "You are a specialized aviation data parser. Respond ONLY with a valid JSON. No preamble. No markdown. No explanations.\n\n"
+                "STRICT OUTPUT SCHEMA:\n"
+                '{"overall_sentiment": float (-1.0 to 1.0), "annotations": [{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]}\n\n'
+                "TAXONOMY RULES:\n"
+                "1. Use ONLY these topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
+                "2. EXPLICIT COMPETITOR MENTIONS: If they praise a competitor (e.g., 'Emirates has better seats'), that is a 'Negative' sentiment for SIA.\n"
+                "3. SARCASM: Phrases like 'Thanks for the 5-hour wait' are 'Negative'.\n"
+                "4. FACTUAL: If no topic is mentioned, return [].\n\n"
+                "ONE-SHOT EXAMPLE:\n"
+                '{"overall_sentiment": 0.85, "annotations": [{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]}\n\n'
+                "INPUT DATA:\n"
+            )
+            prompt += json.dumps(valid_sentences)
+
+            
+            try:
+                llm_out = ""
+                if use_groq:
+                    from groq import Groq
+                    client = Groq(api_key=api_key)
+                    resp = client.chat.completions.create(
+                        messages=[{"role": "system", "content": "You are a JSON API. Output ONLY a raw JSON object. No preamble, no markdown code blocks."}, {"role": "user", "content": prompt}],
+                        model="llama-3.1-8b-instant", temperature=0
+                    )
+                    llm_out = resp.choices[0].message.content or ""
+                else:
+                    import requests
+                    res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output raw JSON object only. No preamble, no backticks.", "stream": False}, timeout=60)
+                    if res.status_code != 200:
+                        raise Exception(f"Ollama returned {res.status_code}: {res.text}")
+                    llm_out = res.json().get("response", "") or ""
+
+                llm_out = str(llm_out)
+                if not llm_out.strip():
+                    raise Exception("LLM returned an entirely blank string.")
+                    
+                # Robust JSON Extraction (Ignore preambles and markdown blocks)
+                match_obj = re.search(r'(\{.*\}|\[.*\])', llm_out, re.DOTALL)
+                if match_obj:
+                    clean_json = match_obj.group(1)
+                else:
+                    clean_json = llm_out # Fallback to raw
+
+                def _normalize_json_text(raw_text):
+                    txt = raw_text.strip()
+                    # Handle Unicode quotes
+                    txt = txt.replace("\u201c", '"').replace("\u201d", '"')
+                    txt = txt.replace("\u2018", "'").replace("\u2019", "'")
+                    # Remove trailing commas
+                    txt = re.sub(r",\s*([}\]])", r"\1", txt)
+                    # Quote common bare keys
+                    txt = re.sub(r'([{,]\s*)(id|topics|sentiment|overall_sentiment|annotations)(\s*:)', r'\1"\2"\3', txt)
+                    return txt
+
+                annotations = None
+                parse_attempts = [clean_json, _normalize_json_text(clean_json)]
+
+                for attempt in parse_attempts:
+                    try:
+                        annotations = json.loads(attempt)
+                        break
+                    except json.JSONDecodeError:
+                        pass
+
+                if annotations is None:
+                    raise ValueError("Malformed JSON payload from LLM")
+                
+                # Handle Case: LLM returns just the array instead of the object
+                if isinstance(annotations, list):
+                    annotations = {"overall_sentiment": 0.0, "annotations": annotations}
+                
+                llm_global_score = float(annotations.get("overall_sentiment", 0.0))
+                llm_ann_list = annotations.get("annotations", [])
+                
+                for ann in llm_ann_list:
+                    sent_str = ann.get("sentiment", "Neutral")
+                    score = 0.0
+                    if "positive" in sent_str.lower(): score = 0.5
+                    elif "negative" in sent_str.lower(): score = -0.5
+                    llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
+                
+                if llm_sentiments or llm_global_score != 0.0:
+                    analysis_meta["llm_used"] = True
+                    analysis_meta["llm_global_score"] = llm_global_score
+                    analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
+            except Exception as e:
+                st.toast("LLM output format issue detected. Using standard local routing.", icon="⚠️")
+                analysis_meta["engine_label"] = "Standard ML + VADER"
+                analysis_meta["engine_tier"] = "Local"
+                analysis_meta["status"] = "Fallback activated: local routing engine"
+    # ----------------------------------
+    
+    aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
+    aspect_lengths = {category: 0.0 for category in ASPECT_TAXONOMY}
+    aspect_mentions = {category: 0 for category in ASPECT_TAXONOMY}
+    sentiment_lengths = {"Positive": 0, "Negative": 0, "Neutral": 0}
+    sentiment_counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
+    general_length = 0
+    
+    highlighted_html = []
+    
+    # Get models for inference (using standard keys from load_ml_models)
+    aspect_engine = GLOBAL_MODELS.get("aspect")
+    
+    for idx, segment in enumerate(segments):
+        if not segment.strip() or re.fullmatch(r'[.!?\n]+', segment):
+            clean_seg = html.escape(segment).replace('\n', '<br>')
+            highlighted_html.append(clean_seg)
+            continue
+            
+        words = set(re.findall(r'\b\w+\b', segment.lower()))
+        if not words:
+            highlighted_html.append(html.escape(segment))
+            continue
+        
+        sent_len = len(segment)
+        matched_cats = []
+        sent_score = 0.0
+        
+        # Fetch contextual tags from LLM dict first
+        if idx in llm_sentiments:
+            topics, sent_score = llm_sentiments[idx]
+            for t in topics:
+                for key in ASPECT_TAXONOMY.keys():
+                    if t.lower().replace("&", "") in key.lower().replace("&", ""):
+                        if key not in matched_cats: matched_cats.append(key)
+                        
+        if not matched_cats and idx not in llm_sentiments:
+            sent_score = analyzer.polarity_scores(segment)['compound']
+            
+            # --- AUTONOMOUS ML ENGINE ---
+            if aspect_engine:
+                try:
+                    pred_binary = aspect_engine.predict([segment.lower()])[0]
+                    categories_list = list(ASPECT_TAXONOMY.keys())
+                    for i, val in enumerate(pred_binary):
+                        if val == 1:
+                            matched_cats.append(categories_list[i])
+                except:
+                    pass
+            
+            if not matched_cats:
+                for category, keywords in ASPECT_TAXONOMY.items():
+                    if any(kw in words for kw in keywords):
+                        matched_cats.append(category)
+        
+        if sent_score > 0.1:
+            sentiment_counts["Positive"] += 1
+        elif sent_score < -0.1:
+            sentiment_counts["Negative"] += 1
+        else:
+            sentiment_counts["Neutral"] += 1
+        
+        segment_safe = html.escape(segment)
+        
+        if matched_cats:
+            split_len = sent_len / len(matched_cats)
+            for cat in matched_cats:
+                aspect_scores[cat].append(sent_score)
+                aspect_lengths[cat] += split_len
+                aspect_mentions[cat] += 1
+                
+            tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px; white-space: nowrap;'>{c}</span>" for c in matched_cats])
+            
+            bg_color = "#f3f4f6"
+            border_color = "#e5e7eb"
+            if sent_score > 0.1:
+                bg_color = "#dcfce7"; border_color = "#bbf7d0"
+            elif sent_score < -0.1:
+                bg_color = "#fee2e2"; border_color = "#fecaca"
+                
+            highlight = f"<span style='background-color: {bg_color}; border: 1px solid {border_color}; padding: 2px 4px; border-radius: 6px; line-height: 2.2;'>{segment_safe}{tags_html}</span>"
+            highlighted_html.append(highlight)
+        else:
+            general_length += sent_len
+            highlighted_html.append(segment_safe)
+    
+    final_tags = []
+    distribution = []
+    
+    for category, scores in aspect_scores.items():
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            if avg_score > 0.05: final_tags.append(f"🟢 {category}")
+            elif avg_score < -0.05: final_tags.append(f"🔴 {category}")
+            else: final_tags.append(f"⚪ {category}")
+            
+        if aspect_mentions[category] > 0:
+            distribution.append({"Topic": category, "Count": aspect_mentions[category]})
+            
+    mention_total = sum(aspect_mentions.values())
+    for row in distribution:
+        row["Share (%)"] = (row["Count"] / mention_total) if mention_total else 0
+    
+    sent_distribution = []
+    sentiment_total = sum(sentiment_counts.values())
+    for sent_type, s_count in sentiment_counts.items():
+        if sentiment_total > 0:
+            sent_distribution.append({"Sentiment": sent_type, "Count": s_count, "Percentage": s_count / sentiment_total})
+        
+    annotated_text = "".join(highlighted_html)
+    final_llm_score = analysis_meta.get("llm_global_score", 0.0)
+    
+    if not analysis_meta.get("llm_used"):
+        final_llm_score = analyzer.polarity_scores(text)['compound']
+        analysis_meta["status"] = "Active: VADER Proxy (LLM-Off mode)"
+    
+    return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta, final_llm_score
+
+tab_ml_predict, tab_overview, tab_explore, tab_export = st.tabs(
+    ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export"]
 )
 
 with tab_export:
@@ -1361,11 +2016,14 @@ with tab_overview:
 
     # Get selected AI model from session state for Dataset Overview
     selected_model = st.session_state.get("selected_ai_model", "auto")
-    st.markdown(generate_dataset_overview(filtered, time_series, selected_model))
+    
+    # Use the new multi-layer JSON overview logic
+    raw_insight = generate_dataset_overview(filtered, time_series, selected_model)
+    render_overview_insight(raw_insight)
 
     st.divider()
 
-    st.subheader("At-a-glance trends")
+    st.subheader("At-a-glance trends", help="**Quick Scan:** Track review volume (orange) and average rating (blue) over time. Sudden drops in rating during high volume often indicate a specific operational failure or platform outage.")
     st.caption("Track how review volume and ratings have changed over time to spot trends and patterns.")
     trend_cols = st.columns(2)
 
@@ -1401,7 +2059,7 @@ with tab_overview:
         )
         st.altair_chart(rating_trend_chart, use_container_width=True)
 
-    st.subheader("Ratings & sentiment")
+    st.subheader("Ratings & sentiment", help="**The Discrepancy Signal:** Compare user-given stars (top) with AI-detected emotional polarity (bottom). High star ratings with low sentiment often reveal 'polite but frustrated' customers who are at high risk of attrition.")
 
     dist_cols = st.columns(2)
 
@@ -1725,7 +2383,7 @@ with tab_overview:
             
             st.altair_chart(eng_base + eng_overlay, use_container_width=True)
 
-    st.subheader("Where reviews come from")
+    st.subheader("Where reviews come from", help="**Platform Bias Analysis:** Identify which review sites are driving your reputation. Different platforms attract different demographics; high TripAdvisor volume often correlates with premium leisure travel.")
     st.caption("Compare review volume and average ratings across different platforms.")
     platform_cols = st.columns(2)
 
@@ -1997,7 +2655,7 @@ with tab_overview:
 
 
     st.write("")
-    st.subheader("Predictive Model EDA")
+    st.subheader("Predictive Model EDA", help="**Model Performance Analytics:** Explore the underlying distributions of model features (VADER scores, Clean Text, etc.) to understand why the AI is making specific predictions.")
 
     with st.expander("Show More", expanded=False):
         # Predictive Model EDA Chart Logic
@@ -2170,10 +2828,10 @@ with tab_overview:
 
     
     st.write("")
-    st.subheader(" Text Insights")
+    st.subheader(" Text Insights", help="**Lexical Context:** Explore the linguistic patterns within the reviews to identify recurring topics and keyword pairings.")
     with st.expander("Show More", expanded=False):
 
-        st.subheader("Helpfulness insights")
+        st.subheader("Helpfulness insights", help="**Engagement Impact:** Analyze which reviews are deemed 'helpful' by the community. These are the narratives currently influencing the brand's public reputation most heavily.")
         st.caption("Understand which reviews are marked as helpful and what characteristics they share.")
         helpful_data = filtered.dropna(subset=["rating", "helpful_votes", "text_length"])
         helpful_cols = st.columns(2)
@@ -2218,7 +2876,7 @@ with tab_overview:
             ).mark_line(color="#1f77b4")
             st.altair_chart(helpful_length_chart + helpful_trend, use_container_width=True)
 
-        st.subheader("Keyword clouds")
+        st.subheader("Keyword clouds", help="**Visual Vocabulary:** A quick glance at the most frequent nouns and adjectives used by your customers to describe their experience.")
         st.caption("Discover the most frequently mentioned words in positive and negative reviews.")
         base_stopwords = set(STOPWORDS) if STOPWORDS else set()
         base_stopwords.update(
@@ -2241,19 +2899,19 @@ with tab_overview:
 
         pos_col, neg_col = st.columns(2)
         with pos_col:
-            st.subheader("Positive reviews (4–5)")
+            st.subheader("Positive reviews (4–5)", help="**Strengths Discovery:** Key terms frequently used in high-rating reviews. These represent your brand's core differentiators.")
             render_wordcloud(pos_reviews, base_stopwords, "Top positive keywords")
         with neg_col:
-            st.subheader("Negative reviews (1–2)")
+            st.subheader("Negative reviews (1–2)", help="**Pain Point Detection:** Key terms frequently used in low-rating reviews. These often highlight the most critical service failures.")
             render_wordcloud(neg_reviews, base_stopwords, "Top negative keywords")
 
-        st.subheader("Title vs full review keywords")
+        st.subheader("Title vs full review keywords", help="**Narrative Consistency:** Compare top-level impressions (titles) vs. deep-dive feedback (full text) to identify if passenger complaints are superficial or structural.")
         title_col, text_col = st.columns(2)
         with title_col:
-            st.subheader("Titles")
+            st.subheader("Titles", help="**Immediate Subjectivity:** Focuses on the review headlines to identify the primary 'emotional hook' or top-level complaint.")
             render_wordcloud(filtered["title"], base_stopwords, "Top title keywords")
         with text_col:
-            st.subheader("Full reviews")
+            st.subheader("Full reviews", help="**Deep Context:** Analyzes the entire review body to uncover secondary service drivers and nuanced feedback that headlines might miss.")
             render_wordcloud(filtered["text"], base_stopwords, "Top full-review keywords")
 
 with tab_explore:
@@ -2397,8 +3055,48 @@ with tab_explore:
     event_data = st.altair_chart(chart, use_container_width=True, on_select="rerun", key="exploration_drilldown")
     
     st.markdown(generate_chart_insight(filtered, x_col, y_col, agg_label))
-    selected_model = st.session_state.get("selected_ai_model", "auto")
-    st.markdown(generate_ai_insight(filtered, x_col, y_col, agg_label, selected_model))
+    
+    # ---------------- AI INSIGHT GATING ----------------
+    # We gate the AI insight behind a button to save on credits (Groq/Ollama API calls)
+    # The insight is cached until the chart configuration changes.
+    current_chart_key = f"{x_col}_{y_col}_{agg_label}_{chart_type}_{len(filtered)}"
+    if st.session_state.get("last_chart_key") != current_chart_key:
+        st.session_state["exploration_insight"] = None
+        st.session_state["last_chart_key"] = current_chart_key
+
+    ai_insight_col1, ai_insight_col2 = st.columns([1, 2.5])
+    with ai_insight_col1:
+        if st.button("✨ Generate AI Insights", use_container_width=True, help="Generate a context-aware insight based on current data. This consumes API credits."):
+            with st.spinner("Analyzing data patterns..."):
+                selected_model = st.session_state.get("selected_ai_model", "auto")
+                st.session_state["exploration_insight"] = generate_ai_insight(filtered, x_col, y_col, agg_label, selected_model)
+    
+    # Display the structured insight
+    insight = st.session_state.get("exploration_insight")
+    if insight:
+        # Handle the case where AI returns a list of one or more objects
+        if isinstance(insight, list) and len(insight) > 0:
+            insight = insight[0] # Take the most relevant overall insight
+            
+        if isinstance(insight, dict):
+            finding = insight.get("finding", "No finding generated.")
+            recommendation = insight.get("recommendation", "No recommendation generated.")
+            urgency = insight.get("urgency", "Medium")
+            
+            # Urgent color mapping
+            u_color = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
+            badge = u_color.get(urgency, "⚪")
+            
+            st.markdown(f"#### {badge} Executive Insight: {urgency} Priority")
+            
+            inc1, inc2 = st.columns(2)
+            with inc1:
+                st.info(f"**🔍 Key Finding**\n\n{finding}")
+            with inc2:
+                st.success(f"**💡 Actionable Recommendation**\n\n{recommendation}")
+        else:
+            # Fallback for raw text/unparsed JSON
+            st.info(f"✨ **AI Insight:**\n\n{str(insight)}")
 
     # --- DRILL-DOWN AUDIT LAYER ---
     st.divider()
@@ -2409,32 +3107,61 @@ with tab_explore:
         selected_points = event_data["selection"]["select"]
     
     if selected_points:
-        st.subheader("🔍 Detailed Audit: Underlying Records")
+        st.subheader("🔍 Detailed Audit: Underlying Records", help="**Drill-down Mechanism:** View the raw data points that comprise the charts above. Use this to verify the specific reviews behind a sentiment spike.")
         
         # Dynamic 2D Filtering (X and Y axis support)
+        # Altair selections can return multiple points; we take the first for simplicity
         point = selected_points[0]
         drill_df = filtered.copy()
         filter_status = []
         
         for f_key, f_val in point.items():
-            if f_key in drill_df.columns:
+            # Skip Altair-specific keys that aren't in our dataframe
+            if f_key not in drill_df.columns or f_key == "value":
+                continue
+                
+            try:
+                # Type-aware filtering for dates (Altair returns epoch ms or ISO strings)
+                if is_datetime64_any_dtype(drill_df[f_key]):
+                    # Convert Altair's numeric timestamp (ms) or string to datetime
+                    if isinstance(f_val, (int, float)):
+                        f_val_dt = pd.to_datetime(f_val, unit='ms')
+                    else:
+                        f_val_dt = pd.to_datetime(f_val)
+                    
+                    # Match by date (ignoring time component for robust drilling)
+                    drill_df = drill_df[drill_df[f_key].dt.floor('D') == f_val_dt.floor('D')]
+                    filter_status.append(f"**{f_key}** = `{f_val_dt.strftime('%Y-%m-%d')}`")
+                
+                # Type-aware filtering for numeric columns
+                elif is_numeric_dtype(drill_df[f_key]):
+                    drill_df = drill_df[drill_df[f_key] == f_val]
+                    filter_status.append(f"**{f_key}** = `{f_val}`")
+                
+                # Standard categorical filtering
+                else:
+                    drill_df = drill_df[drill_df[f_key] == str(f_val)]
+                    filter_status.append(f"**{f_key}** = `{f_val}`")
+            except Exception as e:
+                # Fallback to simple matching if specialized logic fails
                 drill_df = drill_df[drill_df[f_key] == f_val]
                 filter_status.append(f"**{f_key}** = `{f_val}`")
         
         if not drill_df.empty:
-            # Ensure new features are present
+            # Ensure Core Four features are present in the audit view
             for col in ['llm_sentiment_score', 'vader_min', 'has_negative_dealbreaker']:
                 if col not in drill_df.columns:
                     drill_df[col] = 0.0
             
             # Calculate Sarcasm Discrepancy (Pain-Point Audit)
+            # This reveals where VADER (lexical) and LLM (contextual) disagree most
             drill_df['sarcasm_delta'] = (drill_df['vader_min'] - drill_df['llm_sentiment_score']).abs()
             
             st.info(f"Showing **{len(drill_df)}** reviews where {' and '.join(filter_status)}. (Sorted by High Sarcasm/Nuance)")
             
             # Select and reorder columns for Core Four auditing
             audit_cols = [
-                'published_date', 'rating', 'text', 
+                'published_date', 'rating', 'published_platform', 'text', 
                 'llm_sentiment_score', 'vader_min', 'sarcasm_delta',
                 'has_negative_dealbreaker'
             ]
@@ -2447,307 +3174,643 @@ with tab_explore:
                 height=500
             )
         else:
-            st.info("💡 Click on a bar or point in the chart above to explore the underlying reviews.")
+            st.warning(f"⚠️ **Selection mismatch**: No records found matching {' and '.join(filter_status)}. Try clicking a different point.")
     else:
         st.info("💡 **Auditing Tip**: You can click on any bar, line point, or area in the chart to 'drill down' and see the actual review text and AI scores below.")
 
 
+    st.divider()
+    
+    with st.expander("🧠 Strategic Batch Intelligence (Ensemble Engine)", expanded=False):
+        st.markdown("## 🧠 Macro Review Insights", help="This section simulates scoring a dataset with the loaded multi-model consensus engine.")
+        st.markdown("Execute the **Consensus Sentiment Engine** and **Actionable Tag Extraction** across a randomized sample of your *currently filtered dataset*. This leverages the same ensemble model logic to reveal macro trends, identify rating vs. sentiment gaps, and diagnose fleet health.")
+
+        st.write("")
+        
+        insight_text_col = "text" if "text" in df.columns else "content"
+        total_dataset_size = len(df.dropna(subset=[insight_text_col]))
+        max_dataset_size = len(filtered.dropna(subset=[insight_text_col]))
+        
+        # Callback to expand sidebar filters if the user requests more reviews than currently filtered
+        def auto_expand_date_filters():
+            st.session_state["trigger_macro_engine"] = True
+            requested = st.session_state.get("macro_sample_slider", 150)
+            # If the user drags the slider asking for more reviews than the current sidebar date window allows
+            if requested > max_dataset_size:
+                try:
+                    # Calculate the absolute max boundary dates natively
+                    full_starts = pd.date_range(
+                        min_date.to_period("M").to_timestamp(),
+                        max_date.to_period("M").to_timestamp(),
+                        freq="MS",
+                    ).date
+                    if len(full_starts) >= 2:
+                        # Overwrite the sidebar slider session state to maximum
+                        st.session_state["date_range_slider"] = (full_starts[0], full_starts[-1])
+                        st.toast("📅 Automatically expanded the Date Filters to supply the requested dataset volume.")
+                except Exception:
+                    pass
+        
+        # 1. UI Controls (Executive Scan Profiles)
+        insight_cols = st.columns([2, 1, 1])
+        with insight_cols[0]:
+            scan_choice = st.radio(
+                "Executive Scan Intensity",
+                ["Quick (50)", "Standard (200)", "Strategic (500)"],
+                index=1,
+                horizontal=True,
+                help="Choose the depth of the macro analysis. Higher intensity provides better statistical weight for the Priority Matrix."
+            )
+            # Map choice to sample size
+            size_map = {"Quick (50)": 50, "Standard (200)": 200, "Strategic (500)": 500}
+            sample_size = min(total_dataset_size, size_map.get(scan_choice, 200))
+
+        with insight_cols[1]:
+            st.write("")
+            st.write("")
+            run_engine = st.button("🚀 Execute Engine", type="primary", use_container_width=True)
+
+        if run_engine or st.session_state.get("trigger_macro_engine", False):
+            st.session_state["trigger_macro_engine"] = False # Reset so it does not loop
+            with st.spinner(f"Igniting ML Consensus Engine across {sample_size} records..."):
+                
+                # Setup Models (using the GLOBAL bundle)
+                rating_models = GLOBAL_MODELS.get("rating", {})
+                dealbreakers = GLOBAL_MODELS.get("dealbreakers", {})
+                _analyzer = get_vader_analyzer()
+                
+                # Define text column securely
+                text_col = "text" if "text" in filtered.columns else "content"
+                
+                # Safe sample
+                safe_size = min(len(filtered.dropna(subset=[text_col])), sample_size)
+                sample_df = filtered.dropna(subset=[text_col]).sample(safe_size)
+                
+                results = []
+                
+                # UX Progress
+                progress_bar = st.progress(0)
+                
+                for index, row in enumerate(sample_df.itertuples()):
+                    rv_text = str(getattr(row, text_col))
+                    actual_rating = float(getattr(row, "rating", 0))
+                    
+                    # Preprocessing core identical to single predict tab
+                    input_clean = re.sub(r'[^a-z0-9\s]', '', rv_text.lower()).strip()
+                    vader_score = _analyzer.polarity_scores(rv_text)['compound']
+                    
+                    if vader_score > 0.05:
+                        vader_class = "Positive"
+                    elif vader_score < -0.05:
+                        vader_class = "Negative"
+                    else:
+                        vader_class = "Neutral"
+                        
+                    _sentences = re.split(r'[.!?]', rv_text)
+                    _sent_scores = [_analyzer.polarity_scores(s)['compound'] for s in _sentences if s.strip()]
+                    vader_min = min(_sent_scores) if _sent_scores else 0.0
+                    vader_max = max(_sent_scores) if _sent_scores else 0.0
+                    vader_range = vader_max - vader_min
+                    
+                    _words = set(input_clean.split())
+                    has_neg_db = 1 if _words & dealbreakers.get("neg", set()) else 0
+                    has_pos_db = 1 if _words & dealbreakers.get("pos", set()) else 0
+                    
+                    # Valid DataFrame format for our trained custom Pipeline
+                    X_sample = pd.DataFrame({
+                        "clean_text": [input_clean],
+                        "vader_score": [vader_score],
+                        "vader_class": [vader_class],
+                        "vader_min": [vader_min],
+                        "vader_max": [vader_max],
+                        "vader_range": [vader_range],
+                        "has_neg_dealbreaker": [has_neg_db],
+                        "has_pos_dealbreaker": [has_pos_db]
+                    })
+                    
+                    # 2. Consensus Predictions
+                    try:
+                        model_preds = [float(m.predict(X_sample)[0]) for m in rating_models.values()]
+                        consensus_score = sum(model_preds) / len(model_preds)
+                        divergence = np.std(model_preds) if len(model_preds) > 1 else 0
+                        exec_error = None
+                    except Exception as e:
+                        consensus_score = 3.0
+                        divergence = 0.0
+                        exec_error = str(e)
+                    
+                    # 3. Fast Routing Tags (Always use local logic for batch to save time/cost)
+                    detected_tags, _, _, _, _, _ = extract_aspect_tags(rv_text, use_llm=False)
+                    
+                    results.append({
+                        "Review Content": rv_text,
+                        "actual_rating": actual_rating,
+                        "predicted_rating": consensus_score,
+                        "vader_polarity": vader_score,
+                        "divergence": divergence,
+                        "_engine_tags": detected_tags.copy(), # Hidden column for chart rendering
+                        "routing_tags": detected_tags,
+                        "execution_error": exec_error
+                    })
+                    
+                    if index % max(1, safe_size // 20) == 0:
+                        progress_bar.progress((index + 1) / safe_size)
+                    
+                progress_bar.empty()
+                
+                if results:
+                    results_df = pd.DataFrame(results)
+                    
+                    # --- PRE-PROCESSING FOR STRATEGIC VISUALS (CORRECT AGGREGATION) ---
+                    # Clean the tags (removing emojis) before grouping to ensure a single strategic view per topic
+                    results_df['cleaned_tags'] = results_df['_engine_tags'].apply(
+                        lambda tags: [t[2:].strip() if t[0] in ['🟢', '🔴', '⚪'] else t for t in tags]
+                    )
+                    
+                    exploded_df = results_df.explode('cleaned_tags').dropna(subset=['cleaned_tags'])
+                    
+                    if not exploded_df.empty:
+                        # Aggregate sentiment and volume per distinct aspect
+                        aspect_df = exploded_df.groupby('cleaned_tags').agg({
+                            'vader_polarity': 'mean',
+                            'divergence': 'mean',
+                            'cleaned_tags': 'size'
+                        }).rename(columns={
+                            'cleaned_tags': 'Volume',
+                            'vader_polarity': 'Net Sentiment',
+                            'divergence': 'Divergence'
+                        }).reset_index().rename(columns={'cleaned_tags': 'Aspect'})
+                        
+                        # Add strategic categories based on aggregated data
+                        def categorize_aspect(row):
+                            vol = row['Volume']
+                            avg_sent = row['Net Sentiment']
+                            if avg_sent < -0.1 and vol > (safe_size * 0.1): return "Crisis"
+                            if avg_sent > 0.2 and vol > (safe_size * 0.1): return "Success"
+                            if avg_sent < -0.1: return "Emerging"
+                            return "Stable"
+                        
+                        aspect_df['Category'] = aspect_df.apply(categorize_aspect, axis=1)
+                    else:
+                        aspect_df = pd.DataFrame(columns=["Aspect", "Volume", "Net Sentiment", "Divergence", "Category"])
+                    
+                    # --- AI MACRO BRIEFING ---
+                    st.divider()
+                    
+                    # FLEET HEALTH SIGNAL Calculation
+                    avg_polar = results_df['vader_polarity'].mean()
+                    if avg_polar > 0.15:
+                        health_status = "🟢 OPTIMAL HEALTH"
+                        health_color = "#15803d"
+                    elif avg_polar > 0.0:
+                        health_status = "🟡 STABLE / AT RISK"
+                        health_color = "#d97706"
+                    else:
+                        health_status = "🔴 CRITICAL ALERT"
+                        health_color = "#b91c1c"
+
+                    with st.container():
+                        # Fleet Health Badge
+                        st.markdown(f"""
+                            <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;'>
+                                <div style='font-size: 0.8rem; font-weight: 800; color: {health_color}; background-color: {health_color}10; padding: 6px 12px; border-radius: 6px; border: 1px solid {health_color}30;'>
+                                    {health_status}
+                                </div>
+                                <div style='font-size: 0.75rem; color: #64748b; font-weight: 600;'>Ensemble Consistency: {100 - (results_df['divergence'].mean()*100):.1f}%</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        batch_stats = {
+                            "Sample_Depth": scan_choice,
+                            "Avg_Emotional_Polarity": round(avg_polar, 2),
+                            "Top_Aspects": aspect_df.sort_values("Volume", ascending=False).head(3)[["Aspect", "Net Sentiment"]].to_dict('records')
+                        }
+                        
+                        macro_output = generate_macro_executive_summary(batch_stats, selected_model)
+                        render_macro_executive_summary(macro_output)
+
+                    # --- KPI Layer ---
+                    m1, m2, m3, m4 = st.columns(4)
+                    
+                    flagged_count = len(results_df[results_df['divergence'] >= 0.5])
+                    m1.metric(
+                        "High Divergence", 
+                        f"{flagged_count}", 
+                        f"{(flagged_count/safe_size)*100:.1f}% of batch",
+                        delta_color="inverse",
+                        help="Ambiguous reviews where the models disagreed significantly."
+                    )
+                    
+                    # Accuracy Gap
+                    mae = np.abs(results_df['actual_rating'] - results_df['predicted_rating']).mean()
+                    m2.metric(
+                        "Prediction Accuracy", 
+                        f"{100 - (mae*20):.1f}%", 
+                        f"{mae:.2f} Avg Error",
+                        help="Ensemble accuracy vs actual ratings. 100% means perfect alignment."
+                    )
+                    
+                    vader_dir = "Positive" if avg_polar > 0 else "Negative"
+                    m3.metric("Fleet Polarity", f"{avg_polar:.2f}", vader_dir)
+                    
+                    high_risk = results_df[(results_df['actual_rating'] >= 4) & (results_df['vader_polarity'] < -0.25)]
+                    m4.metric(
+                        "High Risk 'Gaps'", 
+                        f"{len(high_risk)}", 
+                        "Critical Detractors",
+                        delta_color="inverse",
+                        help="Users who gave 4-5 stars but left very negative comments."
+                    )
+                    
+                    st.write("")
+                    
+                    # --- VISUALIZATION LAYER ---
+                    v_cols = st.columns([1.2, 1])
+                    
+                    with v_cols[0]:
+                        st.write("")
+                        st.markdown("#### 🎯 Priority Matrix: The Strategic Map", help="**The Priority Filter:** Focus on the 'SOS BRAND AT RISK' quadrant (Bottom-Right). These are topics with high mention volume but low sentiment—representing your most urgent operational bottlenecks.")
+                        
+                        if not aspect_df.empty:
+                            import plotly.express as px
+                            
+                            fig = px.scatter(
+                                aspect_df,
+                                x="Volume",
+                                y="Net Sentiment",
+                                size="Volume",
+                                color="Net Sentiment",
+                                text="Aspect",
+                                color_continuous_scale="RdYlGn",
+                                range_y=[-1.1, 1.3], # Extra room for labels
+                                hover_name="Aspect",
+                                labels={"Net Sentiment": "Sentiment Impact (−1 to +1)", "Volume": "Mention Frequency"}
+                            )
+                            
+                            # Fix labels
+                            fig.update_traces(textposition='top right', marker=dict(line=dict(width=1, color='rgba(0,0,0,0.2)')))
+                            
+                            # BACKGROUND QUADRANT SHAPES (Strategic Interpretation)
+                            fig.add_shape(type="rect", x0=0, y0=0.1, x1=aspect_df['Volume'].max()*1.2, y1=1.3, fillcolor="rgba(16, 185, 129, 0.05)", line_width=0, layer="below") # SUCCESS
+                            fig.add_shape(type="rect", x0=safe_size*0.1, y0=-1.1, x1=aspect_df['Volume'].max()*1.2, y1=0, fillcolor="rgba(239, 68, 68, 0.05)", line_width=0, layer="below") # CRISIS
+                            
+                            fig.add_hline(y=0, line_dash="dash", line_color="#94a3b8", opacity=0.4)
+                            fig.add_vline(x=safe_size*0.1, line_dash="dot", line_color="#94a3b8", opacity=0.3)
+                            
+                            # Quadrant Labels
+                            fig.add_annotation(x=aspect_df['Volume'].max(), y=1.2, text="🏆 KEY DIFFERENTIATORS", showarrow=False, font=dict(size=10, color="#166534"), opacity=0.7)
+                            fig.add_annotation(x=aspect_df['Volume'].max(), y=-0.9, text="🆘 BRAND AT RISK", showarrow=False, font=dict(size=10, color="#991b1b"), opacity=0.7)
+                            
+                            fig.update_layout(
+                                plot_bgcolor="white",
+                                height=480,
+                                margin=dict(l=0, r=0, t=10, b=0),
+                                xaxis=dict(showgrid=True, gridcolor="#f1f5f9", title_font=dict(size=11, color="#64748b")),
+                                yaxis=dict(showgrid=True, gridcolor="#f1f5f9", title_font=dict(size=11, color="#64748b")),
+                                coloraxis_showscale=False,
+                                font_family="Inter, system-ui, sans-serif"
+                            )
+                            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                        else:
+                            st.info("Insufficient aspect data for matrix.")
+
+                    with v_cols[1]:
+                        st.write("")
+                        st.markdown("#### ⚖️ Mismatch Heatmap: Rating vs. Emotion", help="**The Gap Detector:** Identifies 'Sleeping Detractors'. The red-bordered 'SOS' area shows users who gave 4-5 stars but used frustrated language in their text.")
+                        
+                        # Create readable segments for sentiment
+                        results_df['Emotion'] = pd.cut(
+                            results_df['vader_polarity'],
+                            bins=[-1.1, -0.25, 0.25, 1.1],
+                            labels=['Frustrated', 'Neutral', 'Delighted']
+                        )
+                        
+                        heatmap = alt.Chart(results_df).mark_rect(stroke='white', strokeWidth=2).encode(
+                            x=alt.X('actual_rating:O', title="Customer Star Rating"),
+                            y=alt.Y('Emotion:N', title="AI Emotional Core", sort=['Delighted', 'Neutral', 'Frustrated']),
+                            color=alt.Color('count()', scale=alt.Scale(scheme='blues'), title="Review Density"),
+                            tooltip=['count()']
+                        ).properties(height=480)
+                        
+                        # Gap Highlight (Bottom Right: High Rating, Frustrated text)
+                        gap_box = alt.Chart(pd.DataFrame({'x': [4, 5], 'y': ['Frustrated', 'Frustrated']})).mark_rect(
+                            fill='none', stroke='#ef4444', strokeWidth=3, opacity=0.6
+                        ).encode(x='x:O', y='y:N')
+                        
+                        st.altair_chart(heatmap + gap_box, use_container_width=True)
+
+                    # --- 4. HIGH RISK DRILL DOWN ---
+                    if len(high_risk) > 0:
+                        st.write("")
+                        st.markdown("#### ⚠️ Critical 'Sleeping Detractor' Alert", help="**High-Priority Retention:** These specific reviews have the largest gap between their star rating and their actual frustration levels.")
+                        st.markdown("These users gave high star ratings but expressed significant frustration. They are at high risk of attrition.")
+                        
+                        for _, risk_row in high_risk.head(3).iterrows():
+                            with st.expander(f"⭐ {int(risk_row['actual_rating'])} Star Review | Polarity: {risk_row['vader_polarity']:.2f}"):
+                                st.markdown(f"**Review Content:**\n*{risk_row['Review Content']}*")
+                                st.warning(f"**Discrepancy:** The models predicted a rating of {risk_row['predicted_rating']:.1f} ★, identifying a massive gap from the actual {risk_row['actual_rating']} ★ given.")
+
+                    st.divider()
+                    with st.expander("📝 Full Batch Processed Data", expanded=False):
+                        display_df = results_df.drop(columns=['_engine_tags'])
+                        st.dataframe(display_df, use_container_width=True)
+
+
 models = load_ml_models()
 
+ASPECT_TAXONOMY = {
+    "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
+    "Seat & Comfort": ["seat", "comfort", "legroom", "recline", "space", "cramped", "narrow", "sleep", "bed", "aisle", "window", "sore", "uncomfortable"],
+    "Staff & Service": ["crew", "staff", "attendant", "steward", "stewardess", "rude", "friendly", "polite", "helpful", "service", "smile", "ignored", "professional", "attendants"],
+    "Flight Punctuality": ["delay", "delayed", "late", "wait", "cancel", "cancelled", "hours", "schedule", "missed", "connection", "waiting"],
+    "Baggage Handling": ["baggage", "bag", "luggage", "lost", "belt", "claim", "carousel", "damaged"],
+    "Inflight Entertainment": ["wifi", "internet", "movie", "screen", "krisworld", "tv", "entertainment", "monitor", "headphone", "movies"],
+    "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment", "error", "counter", "boarding", "ticket", "tickets"]
+}
+
+def extract_aspect_tags(text, use_llm=True):
+    analyzer = get_vader_analyzer()
+    # Split text keeping delimiters to reconstruct original text
+    segments = re.split(r'([.!?\n]+)', text)
+    analysis_meta = {
+        "engine_label": "Standard ML + VADER",
+        "engine_tier": "Local",
+        "status": "Using local routing engine",
+        "llm_attempted": False,
+        "llm_used": False,
+        "proxy_mode": not use_llm, 
+    }
+    
+    # --- CONTEXT-AWARE LLM UPGRADE ---
+    llm_sentiments = {} # Dictionary mapping segment index -> (topics_list, sentiment_score)
+    
+    model_choice = st.session_state.get("selected_ai_model", "auto")
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    use_groq = (model_choice == "groq" and api_key) or (model_choice == "auto" and api_key)
+    use_ollama = (model_choice == "ollama") or (model_choice == "auto" and not api_key)
+    
+    if use_llm and (use_groq or use_ollama):
+        analysis_meta["llm_attempted"] = True
+        if use_groq:
+            analysis_meta["engine_label"] = "Groq Hybrid AI"
+            analysis_meta["engine_tier"] = "Cloud"
+            analysis_meta["status"] = "Using Groq for Hybrid Nuance Mapping"
+        elif use_ollama:
+            analysis_meta["engine_label"] = "Ollama Hybrid AI"
+            analysis_meta["engine_tier"] = "Local LLM"
+            analysis_meta["status"] = "Using Ollama for Hybrid Nuance Mapping"
+
+        valid_sentences = []
+        for idx, seg in enumerate(segments):
+            if seg.strip() and not re.fullmatch(r'[.!?\n]+', seg):
+                words = set(re.findall(r'\b\w+\b', seg.lower()))
+                if words:
+                    valid_sentences.append({"id": idx, "text": seg.strip()})
+                    
+        if valid_sentences:
+            prompt = (
+                "You are a specialized aviation data parser. Respond ONLY with a valid JSON. No preamble. No markdown. No explanations.\n\n"
+                "STRICT OUTPUT SCHEMA:\n"
+                '{"overall_sentiment": float (-1.0 to 1.0), "annotations": [{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]}\n\n'
+                "TAXONOMY RULES:\n"
+                "1. Use ONLY these topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
+                "2. EXPLICIT COMPETITOR MENTIONS: If they praise a competitor (e.g., 'Emirates has better seats'), that is a 'Negative' sentiment for SIA.\n"
+                "3. SARCASM: Phrases like 'Thanks for the 5-hour wait' are 'Negative'.\n"
+                "4. FACTUAL: If no topic is mentioned, return [].\n\n"
+                "ONE-SHOT EXAMPLE:\n"
+                '{"overall_sentiment": 0.85, "annotations": [{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]}\n\n'
+                "INPUT DATA:\n"
+            )
+            prompt += json.dumps(valid_sentences)
+
+            
+            try:
+                llm_out = ""
+                if use_groq:
+                    from groq import Groq
+                    client = Groq(api_key=api_key)
+                    resp = client.chat.completions.create(
+                        messages=[{"role": "system", "content": "You are a JSON API. Output ONLY a raw JSON object. No preamble, no markdown code blocks."}, {"role": "user", "content": prompt}],
+                        model="llama-3.1-8b-instant", temperature=0
+                    )
+                    llm_out = resp.choices[0].message.content or ""
+                else:
+                    import requests
+                    res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output raw JSON object only. No preamble, no backticks.", "stream": False}, timeout=60)
+                    if res.status_code != 200:
+                        raise Exception(f"Ollama returned {res.status_code}: {res.text}")
+                    llm_out = res.json().get("response", "") or ""
+
+                llm_out = str(llm_out)
+                if not llm_out.strip():
+                    raise Exception("LLM returned an entirely blank string.")
+                    
+                # Robust JSON Extraction (Ignore preambles and markdown blocks)
+                # Finds the first '{' and the last '}'
+                match_obj = re.search(r'(\{.*\}|\[.*\])', llm_out, re.DOTALL)
+                if match_obj:
+                    clean_json = match_obj.group(1)
+                else:
+                    clean_json = llm_out # Fallback to raw
+
+                def _normalize_json_text(raw_text):
+                    txt = raw_text.strip()
+                    # Handle Unicode quotes
+                    txt = txt.replace("\u201c", '"').replace("\u201d", '"')
+                    txt = txt.replace("\u2018", "'").replace("\u2019", "'")
+                    # Remove trailing commas
+                    txt = re.sub(r",\s*([}\]])", r"\1", txt)
+                    # Quote common bare keys
+                    txt = re.sub(r'([{,]\s*)(id|topics|sentiment|overall_sentiment|annotations)(\s*:)', r'\1"\2"\3', txt)
+                    return txt
+
+                annotations = None
+                parse_attempts = [clean_json, _normalize_json_text(clean_json)]
+
+                for attempt in parse_attempts:
+                    try:
+                        annotations = json.loads(attempt)
+                        break
+                    except json.JSONDecodeError:
+                        pass
+
+                if annotations is None:
+                    raise ValueError("Malformed JSON payload from LLM")
+                
+                # Handle Case: LLM returns just the array instead of the object
+                if isinstance(annotations, list):
+                    # Self-healing: Wrap the array into the expected dict structure
+                    annotations = {"overall_sentiment": 0.0, "annotations": annotations}
+                    analysis_meta["status"] = "Adaptive Recovery: JSON Array mapped to Object"
+                
+                llm_global_score = float(annotations.get("overall_sentiment", 0.0))
+                llm_ann_list = annotations.get("annotations", [])
+                
+                for ann in llm_ann_list:
+                    sent_str = ann.get("sentiment", "Neutral")
+                    score = 0.0
+                    if "positive" in sent_str.lower(): score = 0.5
+                    elif "negative" in sent_str.lower(): score = -0.5
+                    llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
+                
+                if llm_sentiments or llm_global_score != 0.0:
+                    analysis_meta["llm_used"] = True
+                    analysis_meta["llm_global_score"] = llm_global_score
+                    analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
+            except Exception as e:
+                st.toast("LLM output format issue detected. Using standard local routing.", icon="⚠️")
+                with st.expander("🛠️ LLM Debug Trace (Raw Output)", expanded=False):
+                    st.code(llm_out, language="text")
+                    st.error(f"Error: {str(e)}")
+                analysis_meta["engine_label"] = "Standard ML + VADER"
+                analysis_meta["engine_tier"] = "Local"
+                analysis_meta["status"] = "Fallback activated: local routing engine"
+                pass # Fallback cleanly to VADER lexicons if LLM fails
+    # ----------------------------------
+    
+    aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
+    aspect_lengths = {category: 0.0 for category in ASPECT_TAXONOMY}
+    aspect_mentions = {category: 0 for category in ASPECT_TAXONOMY}
+    sentiment_lengths = {"Positive": 0, "Negative": 0, "Neutral": 0}
+    sentiment_counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
+    general_length = 0
+    
+    highlighted_html = []
+    
+    for idx, segment in enumerate(segments):
+        if not segment.strip() or re.fullmatch(r'[.!?\n]+', segment):
+            # Replace pure newlines with <br> for HTML rendering, escape others
+            clean_seg = html.escape(segment).replace('\n', '<br>')
+            highlighted_html.append(clean_seg)
+            continue
+            
+        words = set(re.findall(r'\b\w+\b', segment.lower()))
+        if not words:
+            highlighted_html.append(html.escape(segment))
+            continue
+        
+        sent_len = len(segment)
+        matched_cats = []
+        sent_score = 0.0
+        
+        # Fetch contextual tags from LLM dict first
+        if idx in llm_sentiments:
+            topics, sent_score = llm_sentiments[idx]
+            for t in topics:
+                for key in ASPECT_TAXONOMY.keys():
+                    if t.lower().replace("&", "") in key.lower().replace("&", ""):
+                        if key not in matched_cats: matched_cats.append(key)
+                        
+        # If LLM failed, missed it, or wasn't used, fallback to Autonomous ML Engine or Keyword matching
+        if not matched_cats and idx not in llm_sentiments:
+            sent_score = analyzer.polarity_scores(segment)['compound']
+            
+            # --- AUTONOMOUS ML ENGINE UPGRADE ---
+            if aspect_engine:
+                # Multi-label prediction
+                try:
+                    # The model expects a list/Series of strings
+                    pred_binary = aspect_engine.predict([segment.lower()])[0]
+                    categories_list = list(ASPECT_TAXONOMY.keys())
+                    for i, val in enumerate(pred_binary):
+                        if val == 1:
+                            matched_cats.append(categories_list[i])
+                except:
+                    pass
+            
+            # Final fallback to standard keywords if ML engine failed or is missing
+            if not matched_cats:
+                for category, keywords in ASPECT_TAXONOMY.items():
+                    if any(kw in words for kw in keywords):
+                        matched_cats.append(category)
+        
+        # Track sentiment distribution lengths
+        if sent_score > 0.1:
+            sentiment_lengths["Positive"] += sent_len
+            sentiment_counts["Positive"] += 1
+        elif sent_score < -0.1:
+            sentiment_lengths["Negative"] += sent_len
+            sentiment_counts["Negative"] += 1
+        else:
+            sentiment_lengths["Neutral"] += sent_len
+            sentiment_counts["Neutral"] += 1
+        
+        segment_safe = html.escape(segment)
+        
+        if matched_cats:
+            # Distribute length
+            split_len = sent_len / len(matched_cats)
+            for cat in matched_cats:
+                aspect_scores[cat].append(sent_score)
+                aspect_lengths[cat] += split_len
+                aspect_mentions[cat] += 1
+                
+            # Build highlight HTML
+            tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px; white-space: nowrap;'>{c}</span>" for c in matched_cats])
+            
+            # Sentiment color for the block background
+            bg_color = "#f3f4f6" # neutral gray
+            border_color = "#e5e7eb"
+            if sent_score > 0.1:
+                bg_color = "#dcfce7" # subtle green
+                border_color = "#bbf7d0"
+            elif sent_score < -0.1:
+                bg_color = "#fee2e2" # subtle red
+                border_color = "#fecaca"
+                
+            highlight = f"<span style='background-color: {bg_color}; border: 1px solid {border_color}; padding: 2px 4px; border-radius: 6px; line-height: 2.2;'>{segment_safe}{tags_html}</span>"
+            highlighted_html.append(highlight)
+        else:
+            general_length += sent_len
+            highlighted_html.append(segment_safe)
+    
+    final_tags = []
+    distribution = []
+    total_len = sum(aspect_lengths.values()) + general_length
+    
+    for category, scores in aspect_scores.items():
+        if scores:
+            # Average the sentiment across all sentences mentioning this aspect
+            avg_score = sum(scores) / len(scores)
+            if avg_score > 0.05:
+                final_tags.append(f"🟢 {category}")
+            elif avg_score < -0.05:
+                final_tags.append(f"🔴 {category}")
+            else:
+                final_tags.append(f"⚪ {category}")
+                
+        if aspect_mentions[category] > 0:
+            distribution.append({"Topic": category, "Count": aspect_mentions[category]})
+            
+    mention_total = sum(aspect_mentions.values())
+    for row in distribution:
+        row["Share (%)"] = (row["Count"] / mention_total) if mention_total else 0
+    
+    # Sentiment breakdown distribution
+    sent_distribution = []
+    sentiment_total = sum(sentiment_counts.values())
+    for sent_type, s_count in sentiment_counts.items():
+        if sentiment_total > 0:
+            sent_distribution.append({"Sentiment": sent_type, "Count": s_count, "Percentage": s_count / sentiment_total})
+        
+    annotated_text = "".join(highlighted_html)
+    
+    # Extract final global sentiment (priority to LLM)
+    final_llm_score = analysis_meta.get("llm_global_score", 0.0)
+    
+    # --- SENTIMENT PROXYING (STABILIZATION) ---
+    # If LLM wasn't used/available, use VADER compound score as a high-quality proxy
+    # This prevents the 'Core Four' models from being blinded to sentiment.
+    if not analysis_meta.get("llm_used"):
+        final_llm_score = analyzer.polarity_scores(text)['compound']
+        analysis_meta["status"] = "Active: VADER Proxy (LLM-Off mode)"
+    
+    return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta, final_llm_score
+    
 with tab_ml_predict:
     if not models:
         st.error("ML models not found. Please run `train_model.py` first.")
     else:
-        # Define aspect taxonomy
-        ASPECT_TAXONOMY = {
-            "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
-            "Seat & Comfort": ["seat", "comfort", "legroom", "recline", "space", "cramped", "narrow", "sleep", "bed", "aisle", "window", "sore", "uncomfortable"],
-            "Staff & Service": ["crew", "staff", "attendant", "steward", "stewardess", "rude", "friendly", "polite", "helpful", "service", "smile", "ignored", "professional", "attendants"],
-            "Flight Punctuality": ["delay", "delayed", "late", "wait", "cancel", "cancelled", "hours", "schedule", "missed", "connection", "waiting"],
-            "Baggage Handling": ["baggage", "bag", "luggage", "lost", "belt", "claim", "carousel", "damaged"],
-            "Inflight Entertainment": ["wifi", "internet", "movie", "screen", "krisworld", "tv", "entertainment", "monitor", "headphone", "movies"],
-            "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment", "error", "counter", "boarding", "ticket", "tickets"]
-        }
-        
-        def extract_aspect_tags(text, use_llm=True):
-            analyzer = get_vader_analyzer()
-            # Split text keeping delimiters to reconstruct original text
-            segments = re.split(r'([.!?\n]+)', text)
-            analysis_meta = {
-                "engine_label": "Standard ML + VADER",
-                "engine_tier": "Local",
-                "status": "Using local routing engine",
-                "llm_attempted": False,
-                "llm_used": False,
-                "proxy_mode": not use_llm, 
-            }
-            
-            # --- CONTEXT-AWARE LLM UPGRADE ---
-            llm_sentiments = {} # Dictionary mapping segment index -> (topics_list, sentiment_score)
-            
-            model_choice = st.session_state.get("selected_ai_model", "auto")
-            api_key = os.environ.get("GROQ_API_KEY", "")
-            use_groq = (model_choice == "groq" and api_key) or (model_choice == "auto" and api_key)
-            use_ollama = (model_choice == "ollama") or (model_choice == "auto" and not api_key)
-            
-            if use_llm and (use_groq or use_ollama):
-                analysis_meta["llm_attempted"] = True
-                if use_groq:
-                    analysis_meta["engine_label"] = "Groq Hybrid AI"
-                    analysis_meta["engine_tier"] = "Cloud"
-                    analysis_meta["status"] = "Using Groq for Hybrid Nuance Mapping"
-                elif use_ollama:
-                    analysis_meta["engine_label"] = "Ollama Hybrid AI"
-                    analysis_meta["engine_tier"] = "Local LLM"
-                    analysis_meta["status"] = "Using Ollama for Hybrid Nuance Mapping"
-
-                valid_sentences = []
-                for idx, seg in enumerate(segments):
-                    if seg.strip() and not re.fullmatch(r'[.!?\n]+', seg):
-                        words = set(re.findall(r'\b\w+\b', seg.lower()))
-                        if words:
-                            valid_sentences.append({"id": idx, "text": seg.strip()})
-                            
-                if valid_sentences:
-                    prompt = (
-                        "You are a specialized aviation data parser. Respond ONLY with a valid JSON. No preamble. No markdown. No explanations.\n\n"
-                        "STRICT OUTPUT SCHEMA:\n"
-                        '{"overall_sentiment": float (-1.0 to 1.0), "annotations": [{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]}\n\n'
-                        "TAXONOMY RULES:\n"
-                        "1. Use ONLY these topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
-                        "2. EXPLICIT COMPETITOR MENTIONS: If they praise a competitor (e.g., 'Emirates has better seats'), that is a 'Negative' sentiment for SIA.\n"
-                        "3. SARCASM: Phrases like 'Thanks for the 5-hour wait' are 'Negative'.\n"
-                        "4. FACTUAL: If no topic is mentioned, return [].\n\n"
-                        "ONE-SHOT EXAMPLE:\n"
-                        '{"overall_sentiment": 0.85, "annotations": [{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]}\n\n'
-                        "INPUT DATA:\n"
-                    )
-                    prompt += json.dumps(valid_sentences)
-
-                    
-                    try:
-                        llm_out = ""
-                        if use_groq:
-                            from groq import Groq
-                            client = Groq(api_key=api_key)
-                            resp = client.chat.completions.create(
-                                messages=[{"role": "system", "content": "You are a JSON API. Output ONLY a raw JSON object. No preamble, no markdown code blocks."}, {"role": "user", "content": prompt}],
-                                model="llama-3.1-8b-instant", temperature=0
-                            )
-                            llm_out = resp.choices[0].message.content or ""
-                        else:
-                            import requests
-                            res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output raw JSON object only. No preamble, no backticks.", "stream": False}, timeout=60)
-                            if res.status_code != 200:
-                                raise Exception(f"Ollama returned {res.status_code}: {res.text}")
-                            llm_out = res.json().get("response", "") or ""
-
-                        llm_out = str(llm_out)
-                        if not llm_out.strip():
-                            raise Exception("LLM returned an entirely blank string.")
-                            
-                        # Robust JSON Extraction (Ignore preambles and markdown blocks)
-                        # Finds the first '{' and the last '}'
-                        match_obj = re.search(r'(\{.*\}|\[.*\])', llm_out, re.DOTALL)
-                        if match_obj:
-                            clean_json = match_obj.group(1)
-                        else:
-                            clean_json = llm_out # Fallback to raw
-
-                        def _normalize_json_text(raw_text):
-                            txt = raw_text.strip()
-                            # Handle Unicode quotes
-                            txt = txt.replace("\u201c", '"').replace("\u201d", '"')
-                            txt = txt.replace("\u2018", "'").replace("\u2019", "'")
-                            # Remove trailing commas
-                            txt = re.sub(r",\s*([}\]])", r"\1", txt)
-                            # Quote common bare keys
-                            txt = re.sub(r'([{,]\s*)(id|topics|sentiment|overall_sentiment|annotations)(\s*:)', r'\1"\2"\3', txt)
-                            return txt
-
-                        annotations = None
-                        parse_attempts = [clean_json, _normalize_json_text(clean_json)]
-
-                        for attempt in parse_attempts:
-                            try:
-                                annotations = json.loads(attempt)
-                                break
-                            except json.JSONDecodeError:
-                                pass
-
-                        if annotations is None:
-                            raise ValueError("Malformed JSON payload from LLM")
-                        
-                        # Handle Case: LLM returns just the array instead of the object
-                        if isinstance(annotations, list):
-                            # Self-healing: Wrap the array into the expected dict structure
-                            annotations = {"overall_sentiment": 0.0, "annotations": annotations}
-                            analysis_meta["status"] = "Adaptive Recovery: JSON Array mapped to Object"
-                        
-                        llm_global_score = float(annotations.get("overall_sentiment", 0.0))
-                        llm_ann_list = annotations.get("annotations", [])
-                        
-                        for ann in llm_ann_list:
-                            sent_str = ann.get("sentiment", "Neutral")
-                            score = 0.0
-                            if "positive" in sent_str.lower(): score = 0.5
-                            elif "negative" in sent_str.lower(): score = -0.5
-                            llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
-                        
-                        if llm_sentiments or llm_global_score != 0.0:
-                            analysis_meta["llm_used"] = True
-                            analysis_meta["llm_global_score"] = llm_global_score
-                            analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
-                    except Exception as e:
-                        st.toast("LLM output format issue detected. Using standard local routing.", icon="⚠️")
-                        with st.expander("🛠️ LLM Debug Trace (Raw Output)", expanded=False):
-                            st.code(llm_out, language="text")
-                            st.error(f"Error: {str(e)}")
-                        analysis_meta["engine_label"] = "Standard ML + VADER"
-                        analysis_meta["engine_tier"] = "Local"
-                        analysis_meta["status"] = "Fallback activated: local routing engine"
-                        pass # Fallback cleanly to VADER lexicons if LLM fails
-            # ----------------------------------
-            
-            aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
-            aspect_lengths = {category: 0.0 for category in ASPECT_TAXONOMY}
-            aspect_mentions = {category: 0 for category in ASPECT_TAXONOMY}
-            sentiment_lengths = {"Positive": 0, "Negative": 0, "Neutral": 0}
-            sentiment_counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
-            general_length = 0
-            
-            highlighted_html = []
-            
-            for idx, segment in enumerate(segments):
-                if not segment.strip() or re.fullmatch(r'[.!?\n]+', segment):
-                    # Replace pure newlines with <br> for HTML rendering, escape others
-                    clean_seg = html.escape(segment).replace('\n', '<br>')
-                    highlighted_html.append(clean_seg)
-                    continue
-                    
-                words = set(re.findall(r'\b\w+\b', segment.lower()))
-                if not words:
-                    highlighted_html.append(html.escape(segment))
-                    continue
-                
-                sent_len = len(segment)
-                matched_cats = []
-                sent_score = 0.0
-                
-                # Fetch contextual tags from LLM dict first
-                if idx in llm_sentiments:
-                    topics, sent_score = llm_sentiments[idx]
-                    for t in topics:
-                        for key in ASPECT_TAXONOMY.keys():
-                            if t.lower().replace("&", "") in key.lower().replace("&", ""):
-                                if key not in matched_cats: matched_cats.append(key)
-                                
-                # If LLM failed, missed it, or wasn't used, fallback to Autonomous ML Engine or Keyword matching
-                if not matched_cats and idx not in llm_sentiments:
-                    sent_score = analyzer.polarity_scores(segment)['compound']
-                    
-                    # --- AUTONOMOUS ML ENGINE UPGRADE ---
-                    if aspect_engine:
-                        # Multi-label prediction
-                        try:
-                            # The model expects a list/Series of strings
-                            pred_binary = aspect_engine.predict([segment.lower()])[0]
-                            categories_list = list(ASPECT_TAXONOMY.keys())
-                            for i, val in enumerate(pred_binary):
-                                if val == 1:
-                                    matched_cats.append(categories_list[i])
-                        except:
-                            pass
-                    
-                    # Final fallback to standard keywords if ML engine failed or is missing
-                    if not matched_cats:
-                        for category, keywords in ASPECT_TAXONOMY.items():
-                            if any(kw in words for kw in keywords):
-                                matched_cats.append(category)
-                
-                # Track sentiment distribution lengths
-                if sent_score > 0.1:
-                    sentiment_lengths["Positive"] += sent_len
-                    sentiment_counts["Positive"] += 1
-                elif sent_score < -0.1:
-                    sentiment_lengths["Negative"] += sent_len
-                    sentiment_counts["Negative"] += 1
-                else:
-                    sentiment_lengths["Neutral"] += sent_len
-                    sentiment_counts["Neutral"] += 1
-                
-                segment_safe = html.escape(segment)
-                
-                if matched_cats:
-                    # Distribute length
-                    split_len = sent_len / len(matched_cats)
-                    for cat in matched_cats:
-                        aspect_scores[cat].append(sent_score)
-                        aspect_lengths[cat] += split_len
-                        aspect_mentions[cat] += 1
-                        
-                    # Build highlight HTML
-                    tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px; white-space: nowrap;'>{c}</span>" for c in matched_cats])
-                    
-                    # Sentiment color for the block background
-                    bg_color = "#f3f4f6" # neutral gray
-                    border_color = "#e5e7eb"
-                    if sent_score > 0.1:
-                        bg_color = "#dcfce7" # subtle green
-                        border_color = "#bbf7d0"
-                    elif sent_score < -0.1:
-                        bg_color = "#fee2e2" # subtle red
-                        border_color = "#fecaca"
-                        
-                    highlight = f"<span style='background-color: {bg_color}; border: 1px solid {border_color}; padding: 2px 4px; border-radius: 6px; line-height: 2.2;'>{segment_safe}{tags_html}</span>"
-                    highlighted_html.append(highlight)
-                else:
-                    general_length += sent_len
-                    highlighted_html.append(segment_safe)
-            
-            final_tags = []
-            distribution = []
-            total_len = sum(aspect_lengths.values()) + general_length
-            
-            for category, scores in aspect_scores.items():
-                if scores:
-                    # Average the sentiment across all sentences mentioning this aspect
-                    avg_score = sum(scores) / len(scores)
-                    if avg_score > 0.05:
-                        final_tags.append(f"🟢 {category}")
-                    elif avg_score < -0.05:
-                        final_tags.append(f"🔴 {category}")
-                    else:
-                        final_tags.append(f"⚪ {category}")
-                        
-                if aspect_mentions[category] > 0:
-                    distribution.append({"Topic": category, "Count": aspect_mentions[category]})
-                    
-            mention_total = sum(aspect_mentions.values())
-            for row in distribution:
-                row["Share (%)"] = (row["Count"] / mention_total) if mention_total else 0
-            
-            # Sentiment breakdown distribution
-            sent_distribution = []
-            sentiment_total = sum(sentiment_counts.values())
-            for sent_type, s_count in sentiment_counts.items():
-                if sentiment_total > 0:
-                    sent_distribution.append({"Sentiment": sent_type, "Count": s_count, "Percentage": s_count / sentiment_total})
-                
-            annotated_text = "".join(highlighted_html)
-            
-            # Extract final global sentiment (priority to LLM)
-            final_llm_score = analysis_meta.get("llm_global_score", 0.0)
-            
-            # --- SENTIMENT PROXYING (STABILIZATION) ---
-            # If LLM wasn't used/available, use VADER compound score as a high-quality proxy
-            # This prevents the 'Core Four' models from being blinded to sentiment.
-            if not analysis_meta.get("llm_used"):
-                final_llm_score = analyzer.polarity_scores(text)['compound']
-                analysis_meta["status"] = "Active: VADER Proxy (LLM-Off mode)"
-            
-            return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta, final_llm_score
-            
         # Global Model Handling for this Tab
         # --- TOURNAMENT ANALYZER SETUP ---
         # Models are loaded dynamically based on A/B selection below.
@@ -3212,33 +4275,30 @@ with tab_ml_predict:
                 engine_bg = engine_colors.get(analysis_meta.get("engine_tier"), "#f3f4f6")
                 status_color = "#166534" if analysis_meta.get("llm_used") else "#374151"
                 
-                # Use 3 columns: 1st: Badge (Narrowed), 2nd: Reload button, 3rd: Expanded Spacer (2x)
-                st_cols_engine = st.columns([3, 1.5, 2], gap="small")
+                # Use 2 columns for a more balanced, professional header row
+                st_cols_engine = st.columns([5, 1.2], gap="small")
                 with st_cols_engine[0]:
                     st.markdown(
                         f"""
-                        <div style="border:1px solid #e5e7eb; border-radius:10px; height:48px; padding:0.1rem 1rem; display:flex; align-items:center; background:#ffffff; width: fit-content;">
-                            <div style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center;">
-                                <span style="font-size:1.0rem; font-weight:700; letter-spacing:0.02em; color:#6b7280; text-transform:uppercase;">Analysis engine</span>
-                                <span style="background:{engine_bg}; color:#111827; border:1px solid #d1d5db; border-radius:999px; padding:0.2rem 0.6rem; font-size:1.05rem; font-weight:700;">{analysis_meta.get('engine_label', 'Standard ML + VADER')}</span>
-                                <span style="font-size:1.08rem; color:{status_color}; font-weight:600;">{analysis_meta.get('status', '')}</span>
+                        <div style="border:1px solid #e5e7eb; border-radius:10px; padding:0.6rem 1.25rem; display:flex; align-items:center; background:#ffffff; height:auto; width: fit-content; margin-bottom: 8px;">
+                            <div style="display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap;">
+                                <span style="font-size:0.85rem; font-weight:700; letter-spacing:0.04em; color:#6b7280; text-transform:uppercase; white-space:nowrap; margin-right: 4px;">Analysis engine</span>
+                                <span style="background:{engine_bg}; color:#111827; border:1px solid #d1d5db; border-radius:999px; padding:0.25rem 0.75rem; font-size:1.0rem; font-weight:700; white-space:nowrap; margin: 2px 0;">{analysis_meta.get('engine_label', 'Standard ML + VADER')}</span>
+                                <span style="font-size:1rem; color:{status_color}; font-weight:600; margin: 2px 0;">{analysis_meta.get('status', '')}</span>
                             </div>
                         </div>
                         """,
                         unsafe_allow_html=True,
                     )
                 
-                # Only show the reload button in the 2nd column if we are in a fallback (failed LLM) state
+                # Only show the reload button if we are in a fallback state
                 with st_cols_engine[1]:
                     if is_ai_fallback:
-                        if st.button("↻ Reload", key="reload_ai_service", help="Attempt to reconnect to the AI service (Groq/Ollama)", use_container_width=False):
+                        # Custom styling to make the button height match the status badge
+                        if st.button("↻ Reload", key="reload_ai_service", help="Attempt to reconnect to the AI service (Groq/Ollama)", use_container_width=True):
                             st.rerun()
                     else:
-                        pass # Keep blank if no fallback
-
-                with st_cols_engine[2]:
-                    # Blank spacer
-                    pass
+                        pass
                 
                 st.write("") # Added vertical breathing room
                 
@@ -3318,15 +4378,15 @@ with tab_ml_predict:
                 
                 raw_html = f"""
                 <div class="verdict-hero" style="background-color: {h_bg}; border-left-color: {h_border};">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                        <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 1rem;">
+                        <div style="min-width: 140px;">
                             <span class="verdict-hero-title">AI Predicted Rating</span>
                             <div style="display: flex; align-items: baseline; margin-top: 4px;">
                                 <span class="verdict-score-big" style="color: {h_text};">{int(consensus_winner)}.0</span>
                                 <span style="font-size: 1.5rem; font-weight: 700; color: {h_text}; opacity: 0.7;">/ 5</span>
                             </div>
                         </div>
-                        <div style="display: flex; align-items: center; padding-top: 10px;">
+                        <div style="display: flex; align-items: center; padding-top: 5px; flex-shrink: 0;">
                             {stars_display}
                         </div>
                     </div>
@@ -3602,304 +4662,6 @@ with tab_ml_predict:
 
 
 
-with tab_insights:
-    st.markdown("## 🧠 Macro Review Insights", help="This tab simulates scoring a dataset with the loaded multi-model consensus engine.")
-    st.markdown("Execute the **Consensus Sentiment Engine** and **Actionable Tag Extraction** across a randomized sample of your *currently filtered dataset*. This leverages the same ensemble model logic to reveal macro trends, identify rating vs. sentiment gaps, and diagnose fleet health.")
 
-    st.write("")
-    
-    insight_text_col = "text" if "text" in df.columns else "content"
-    total_dataset_size = len(df.dropna(subset=[insight_text_col]))
-    max_dataset_size = len(filtered.dropna(subset=[insight_text_col]))
-    
-    # Callback to expand sidebar filters if the user requests more reviews than currently filtered
-    def auto_expand_date_filters():
-        st.session_state["trigger_macro_engine"] = True
-        requested = st.session_state.get("macro_sample_slider", 150)
-        # If the user drags the slider asking for more reviews than the current sidebar date window allows
-        if requested > max_dataset_size:
-            try:
-                # Calculate the absolute max boundary dates natively
-                full_starts = pd.date_range(
-                    min_date.to_period("M").to_timestamp(),
-                    max_date.to_period("M").to_timestamp(),
-                    freq="MS",
-                ).date
-                if len(full_starts) >= 2:
-                    # Overwrite the sidebar slider session state to maximum
-                    st.session_state["date_range_slider"] = (full_starts[0], full_starts[-1])
-                    st.toast("📅 Automatically expanded the Date Filters to supply the requested dataset volume.")
-            except Exception:
-                pass
-    
-    # 1. UI Controls
-    insight_cols = st.columns([1, 1, 2])
-    with insight_cols[0]:
-        valid_max = max(10, total_dataset_size)
-        sample_size = st.slider(
-            "Sample size (reviews)", 
-            min_value=10, 
-            max_value=valid_max, 
-            value=min(150, max_dataset_size) if "macro_sample_slider" not in st.session_state else st.session_state["macro_sample_slider"], 
-            step=50, 
-            key="macro_sample_slider",
-            on_change=auto_expand_date_filters,
-            help="Select the exact volume of random reviews to process. Note: If you request more reviews than currently exist in your Date Filter range, the Sidebar Dates will automatically expand to pull them in."
-        )
-    with insight_cols[1]:
-        st.write("")
-        st.write("")
-        run_engine = st.button("🚀 Execute Engine", type="primary", use_container_width=True)
-
-    if run_engine or st.session_state.get("trigger_macro_engine", False):
-        st.session_state["trigger_macro_engine"] = False # Reset so it does not loop
-        with st.spinner(f"Igniting ML Consensus Engine across {sample_size} records..."):
-            
-            # Setup Models (using the cached multi-model bundle)
-            model_bundle = load_ml_models()
-            rating_models = model_bundle.get("rating_models", {})
-            dealbreakers = model_bundle.get("dealbreakers", {})
-            _analyzer = get_vader_analyzer()
-            
-            # Define text column securely
-            text_col = "text" if "text" in filtered.columns else "content"
-            
-            # Safe sample
-            safe_size = min(len(filtered.dropna(subset=[text_col])), sample_size)
-            sample_df = filtered.dropna(subset=[text_col]).sample(safe_size)
-            
-            results = []
-            
-            # UX Progress
-            progress_bar = st.progress(0)
-            
-            for index, row in enumerate(sample_df.itertuples()):
-                rv_text = str(getattr(row, text_col))
-                actual_rating = float(getattr(row, "rating", 0))
-                
-                # Preprocessing core identical to single predict tab
-                input_clean = re.sub(r'[^a-z0-9\s]', '', rv_text.lower()).strip()
-                vader_score = _analyzer.polarity_scores(rv_text)['compound']
-                
-                if vader_score > 0.05:
-                    vader_class = "Positive"
-                elif vader_score < -0.05:
-                    vader_class = "Negative"
-                else:
-                    vader_class = "Neutral"
-                    
-                _sentences = re.split(r'[.!?]', rv_text)
-                _sent_scores = [_analyzer.polarity_scores(s)['compound'] for s in _sentences if s.strip()]
-                vader_min = min(_sent_scores) if _sent_scores else 0.0
-                vader_max = max(_sent_scores) if _sent_scores else 0.0
-                vader_range = vader_max - vader_min
-                
-                _words = set(input_clean.split())
-                has_neg_db = 1 if _words & dealbreakers.get("neg", set()) else 0
-                has_pos_db = 1 if _words & dealbreakers.get("pos", set()) else 0
-                
-                # Valid DataFrame format for our trained custom Pipeline
-                X_sample = pd.DataFrame({
-                    "clean_text": [input_clean],
-                    "vader_score": [vader_score],
-                    "vader_class": [vader_class],
-                    "vader_min": [vader_min],
-                    "vader_max": [vader_max],
-                    "vader_range": [vader_range],
-                    "has_neg_dealbreaker": [has_neg_db],
-                    "has_pos_dealbreaker": [has_pos_db]
-                })
-                
-                # 2. Consensus Predictions
-                try:
-                    model_preds = [float(m.predict(X_sample)[0]) for m in rating_models.values()]
-                    consensus_score = sum(model_preds) / len(model_preds)
-                    divergence = np.std(model_preds) if len(model_preds) > 1 else 0
-                    exec_error = None
-                except Exception as e:
-                    consensus_score = 3.0
-                    divergence = 0.0
-                    exec_error = str(e)
-                
-                # 3. Fast Routing Tags (Always use local logic for batch to save time/cost)
-                detected_tags, _, _, _, _, _ = extract_aspect_tags(rv_text, use_llm=False)
-                
-                results.append({
-                    "text_snippet": rv_text[:60] + "..." if len(rv_text) > 60 else rv_text,
-                    "actual_rating": actual_rating,
-                    "predicted_rating": consensus_score,
-                    "vader_polarity": vader_score,
-                    "divergence": divergence,
-                    "_engine_tags": detected_tags.copy(), # Hidden column for chart rendering
-                    "routing_tags": detected_tags,
-                    "execution_error": exec_error
-                })
-                
-                if index % max(1, safe_size // 20) == 0:
-                    progress_bar.progress((index + 1) / safe_size)
-                
-            progress_bar.empty()
-            
-            if results:
-                st.success(f"Successfully processed {safe_size} reviews through the ensemble engine.")
-                results_df = pd.DataFrame(results)
-                
-                st.divider()
-                
-                # --- KPI Layer ---
-                m1, m2, m3, m4 = st.columns(4)
-                
-                flagged_count = len(results_df[results_df['divergence'] >= 0.5])
-                m1.metric(
-                    "High Divergence Warnings", 
-                    f"{flagged_count}", 
-                    f"{(flagged_count/safe_size)*100:.1f}% of batch",
-                    delta_color="inverse",
-                    help="Reviews that heavily split the committee's vote (StdDev >= 0.5). Typically sarcastic or complex."
-                )
-                
-                avg_actual = results_df['actual_rating'].mean()
-                avg_pred = results_df['predicted_rating'].mean()
-                m2.metric(
-                    "Avg Panel Prediction", 
-                    f"{avg_pred:.2f} ★", 
-                    f"{(avg_pred - avg_actual):.2f} vs Actual",
-                    help="The aggregate consensus score compared to the mathematical actual star ratings left by users."
-                )
-                
-                avg_vader = results_df['vader_polarity'].mean()
-                vader_dir = "Positive" if avg_vader > 0 else "Negative"
-                m3.metric(
-                    "Fleet Emotional Polarity", 
-                    f"{avg_vader:.2f}",
-                    vader_dir,
-                    help="Vader algorithmic emotional intensity scale (-1.0 to 1.0). Independent of star rating."
-                )
-                
-                tag_presence = results_df['routing_tags'].apply(len).mean()
-                m4.metric(
-                    "Tags Per Review", 
-                    f"{tag_presence:.1f}",
-                    help="Average number of actionable routing tags correctly surfaced per review."
-                )
-                
-                st.write("")
-                
-                # --- Charting Layer ---
-                c1, c2 = st.columns(2)
-                
-                with c1:
-                    st.markdown("**Top Actionable Drivers (Categorical)**")
-                    all_tags = []
-                    for t_list in results_df['_engine_tags']:
-                        all_tags.extend(t_list)
-                    
-                    if all_tags:
-                        import plotly.express as px
-                        
-                        tag_counts = pd.Series(all_tags).value_counts().head(10).reset_index()
-                        tag_counts.columns = ['Routing Tag', 'Volume']
-                        
-                        plotly_labels = []
-                        bar_colors = []
-                        hover_labels = []
-                        
-                        for tag in tag_counts['Routing Tag']:
-                            clean_name = tag[2:].strip() if tag[0] in ['🟢', '🔴', '⚪'] else tag
-                            if tag.startswith("🟢"):
-                                dot_color = "#059669" # Rich Emerald
-                                bar_color = "#10b981" # Soft Emerald
-                            elif tag.startswith("🔴"):
-                                dot_color = "#b91c1c" # Rich Red
-                                bar_color = "#ef4444" # Soft Red
-                            else:
-                                dot_color = "#4b5563" # Rich Gray
-                                bar_color = "#9ca3af" # Soft Gray
-                                
-                            plotly_labels.append(f"<span style='color: {dot_color}; font-size: 16px;'>●</span> <b>{clean_name}</b>")
-                            bar_colors.append(bar_color)
-                            hover_labels.append(clean_name)
-                            
-                        tag_counts['Custom Label'] = plotly_labels
-                        tag_counts['Color'] = bar_colors
-                        tag_counts['Hover_Name'] = hover_labels
-                        
-                        tag_counts = tag_counts.sort_values("Volume", ascending=True)
-                        
-                        fig = px.bar(
-                            tag_counts,
-                            x="Volume",
-                            y="Custom Label",
-                            orientation='h',
-                            color="Color",
-                            color_discrete_map="identity",
-                            text="Volume",
-                            custom_data=['Hover_Name']
-                        )
-                        
-                        fig.update_layout(
-                            font_family="ui-sans-serif, system-ui, -apple-system, sans-serif",
-                            margin=dict(l=0, r=40, t=20, b=0), # Extra right margin prevents label cut-off
-                            plot_bgcolor="rgba(0,0,0,0)",
-                            paper_bgcolor="rgba(0,0,0,0)",
-                            xaxis=dict(visible=False, showgrid=False),
-                            yaxis=dict(
-                                title="", 
-                                showgrid=False, 
-                                showline=False,
-                                zeroline=False,
-                                tickfont=dict(size=14, color="#374151")
-                            ),
-                            showlegend=False,
-                            hovermode="closest", # Forces tooltips to render straight to the cursor instead of diagonally linking to the y-axis
-                            height=340,
-                            dragmode=False, # Prevents accidental zooming breaking the UI
-                            hoverlabel=dict(
-                                bgcolor="#ffffff",
-                                font_size=13,
-                                font_family="ui-sans-serif, system-ui, sans-serif",
-                                font_color="#111827",
-                                bordercolor="#e5e7eb",
-                                align="left"
-                            )
-                        )
-                        
-                        fig.update_traces(
-                            textposition="outside",
-                            texttemplate=" %{x} ", # Add slight padding between bar and number
-                            textfont=dict(color="#4b5563", size=13, weight="bold"),
-                            cliponaxis=False, # CRITICAL: allows the text to overflow outside the plotting area
-                            hovertemplate="<b>%{customdata[0]}</b><br>Volume: %{x} mentions<extra></extra>",
-                            marker=dict(opacity=0.85, line=dict(width=0))
-                        )
-                        
-                        # config={'displayModeBar': False} completely hides the distracting Plotly toolbar
-                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'staticPlot': False})
-                    else:
-                        st.info("No actionable tags found in this sample.")
-                
-                with c2:
-                    st.markdown("**Sentiment vs. Star Rating (Discrepancy Matrix)**")
-                    st.caption("Locate harsh emotion disguised as high star ratings (bottom right).")
-                    
-                    scatter_chart = alt.Chart(results_df).mark_circle(size=80, opacity=0.7).encode(
-                        x=alt.X('actual_rating:O', title="Actual User Star Rating"),
-                        y=alt.Y('vader_polarity:Q', title="Emotional Polarity (-1 to 1)"),
-                        color=alt.Color(
-                            'divergence:Q', 
-                            scale=alt.Scale(scheme='turbo'), 
-                            title='Model Divergence (Warning)'
-                        ),
-                        tooltip=['actual_rating', 'predicted_rating', 'vader_polarity', 'divergence', 'text_snippet']
-                    ).properties(height=320)
-                    
-                    # Add zero line for emotion
-                    hline = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='red', strokeDash=[2,2], opacity=0.5).encode(y='y:Q')
-                    
-                    st.altair_chart(scatter_chart + hline, use_container_width=True)
-                
-                st.write("")
-                st.markdown("**Processed Enforcement Data**")
-                display_df = results_df.drop(columns=['_engine_tags'])
-                st.dataframe(display_df, use_container_width=True)
+# End of tab_insights logic removal
 
