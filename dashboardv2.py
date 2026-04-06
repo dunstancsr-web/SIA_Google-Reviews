@@ -3875,12 +3875,13 @@ with tab_ml_predict:
                 /* Analysis Engine Reload button base styles (inherited by JS) */
                 .reload-yellow-pulse {
                     height: 48px !important;
-                    min-width: 280px !important; /* Doubled width footprint */
-                    font-size: 2.1rem !important;
+                    min-width: 140px !important; /* Responsive width avoids UI overlap */
+                    width: 100% !important;
+                    font-size: 1.1rem !important;
                     background-color: #fef08a !important; 
                     color: #854d0e !important;           
                     border-color: #fde047 !important;
-                    font-weight: bold !important;
+                    font-weight: 700 !important;
                     transition: all 0.3s ease !important;
                     display: flex !important;
                     justify-content: center !important;
@@ -4310,7 +4311,7 @@ with tab_ml_predict:
                 status_color = "#166534" if analysis_meta.get("llm_used") else "#374151"
                 
                 # Use 2 columns for a more balanced, professional header row
-                st_cols_engine = st.columns([5, 1.2], gap="small")
+                st_cols_engine = st.columns([3, 1], gap="medium")
                 with st_cols_engine[0]:
                     st.markdown(
                         f"""
