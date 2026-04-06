@@ -4647,7 +4647,15 @@ with tab_ml_predict:
                 # Move the Actionable Routing Tags to be under the divider
                 st.subheader(
                     "🎯 Actionable Routing Tags",
-                    help="Recommended follow-up routing based on the detected issues and sentiment.",
+                    help="""Recommended follow-up routing based on our **7-point aviation taxonomy**:
+
+1. **🍲 Food & Beverage:** Analyzes everything related to the menu, meals (Chicken/Beef/etc.), and drinks (Wine/Water/etc.).
+2. **💺 Seat & Comfort:** Tracks mentions of legroom, seat recline, and "bed" comfort on long-haul flights.
+3. **🤝 Staff & Service:** The "Human Element"—monitoring keywords like crew, attendants, helpful, polite, or professional.
+4. **⏱️ Flight Punctuality:** Specifically pulls out data on delays, cancellations, missed connections, and waiting times.
+5. **🧳 Baggage Handling:** Dedicated to lost luggage, carousel wait times, and damaged bags.
+6. **🖥️ Inflight Entertainment:** Monitors the health of KrisWorld, WiFi, movies, and headphone quality.
+7. **🎟️ Booking & Check-in:** Covers the pre-flight experience, including the website, SIA App, online check-in, and boarding counters."""
                 )
                 st.markdown(f"<div style='margin-top: 0.2rem;'>{tags_html}</div>", unsafe_allow_html=True)
                 
