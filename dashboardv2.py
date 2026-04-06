@@ -162,6 +162,19 @@ st.set_page_config(page_title="Self‑Service Data Hub", page_icon="SIA", layout
 st.markdown(
     """
     <style>
+        /* PREVENT HORIZONTAL SCROLL ON MOBILE */
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            max-width: 100vw !important;
+            overflow-x: hidden !important;
+        }
+        
+        .main .block-container {
+            max-width: 100vw !important;
+            overflow-x: hidden !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+
         html, body, [class*="css"] {
             font-family: Arial, sans-serif;
         }
@@ -249,6 +262,12 @@ st.markdown(
         [data-baseweb="tab-list"] {
             gap: 0.35rem;
             margin-bottom: 0.35rem;
+            max-width: 100% !important;
+            overflow-x: auto !important;
+            scrollbar-width: none; /* Firefox */
+        }
+        [data-baseweb="tab-list"]::-webkit-scrollbar {
+            display: none; /* Hide for Chrome/Safari */
         }
         [data-baseweb="tab-list"] button,
         [data-baseweb="tab-list"] [role="tab"],
@@ -356,11 +375,24 @@ st.markdown(
                 font-size: 1rem !important;
                 padding: 0.8rem 1.2rem !important;
             }
-            .title-hover-tooltip, .sia-popover {
+            .title-hover-tooltip, .sia-popover, .sausage-content {
                 width: 90vw !important;
                 left: 5vw !important;
+                right: 5vw !important;
                 transform: none !important;
                 white-space: normal !important;
+                box-sizing: border-box !important;
+                /* Ensure it doesn't push the page */
+                max-width: calc(100vw - 2rem) !important;
+                position: fixed !important; /* Fix to viewport on mobile for stability */
+                top: 20% !important;
+                margin: 0 !important;
+            }
+            /* Correctly handle tabs on mobile to be scrollable but contained */
+            [data-baseweb="tab-list"] {
+                display: flex !important;
+                flex-wrap: nowrap !important;
+                justify-content: flex-start !important;
             }
         }
         
@@ -611,6 +643,12 @@ st.markdown(
         }
         .sausage-wrap:hover .sausage-content {
             display: block;
+        }
+        
+        /* Ensure specific containers don't overflow */
+        .verdict-hero, .consensus-container, .sia-chip {
+            max-width: 100% !important;
+            box-sizing: border-box !important;
         }
     </style>
     """,
