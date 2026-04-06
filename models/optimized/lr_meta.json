@@ -6,8 +6,8 @@
   "train_accuracy": 0.9672,
   "accuracy": 0.9661,
   "display_name": "Logistic Regression (tuned C=0.5)",
-  "trained_at": "2026-04-06T19:35:54.370582",
-  "training_time_s": 5.4,
+  "trained_at": "2026-04-06T19:51:34.025034",
+  "training_time_s": 5.13,
   "feature_streams": 4,
   "features": [
     "clean_text",

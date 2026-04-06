@@ -6,8 +6,8 @@
   "train_accuracy": 0.9988,
   "accuracy": 0.9532,
   "display_name": "Linear SVM (Calibrated)",
-  "trained_at": "2026-04-06T19:35:54.968099",
-  "training_time_s": 2.16,
+  "trained_at": "2026-04-06T19:51:34.610099",
+  "training_time_s": 2.1,
   "feature_streams": 4,
   "features": [
     "clean_text",

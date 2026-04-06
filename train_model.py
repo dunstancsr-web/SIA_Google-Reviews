@@ -176,7 +176,8 @@ def main():
     print("\n" + "="*40 + "\nTraining Random Forest Ensembler (Soft Voting over 3 models)...\n" + "="*40)
     t_rf_start = time.time()
     # Replaced XGBoost with an unconstrained Random Forest to avoid missing Mac libomp dependencies
-    rf = RandomForestClassifier(n_estimators=300, max_depth=None, min_samples_leaf=1, max_features='sqrt', random_state=42, n_jobs=-1)
+    # Capped n_estimators=100 and max_depth=35 to keep the .pkl file under 100MB for GitHub compatibility
+    rf = RandomForestClassifier(n_estimators=100, max_depth=35, min_samples_leaf=1, max_features='sqrt', random_state=42, n_jobs=-1)
     
     # The ultimate ensemble model
     ensemble = VotingClassifier(
