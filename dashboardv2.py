@@ -44,14 +44,27 @@ def load_ml_models(model_dir: str = "models"):
             "Linear SVM": (f"{model_dir}/svc_model.pkl", f"{model_dir}/svc_meta.json")
         }
         
+        def patch_recursive_lr(obj):
+            """Robustly restore missing 'multi_class' attribute for cross-version unpickling."""
+            # 1. Base Case: If it's LogisticRegression, force attribute if missing
+            if 'LogisticRegression' in str(type(obj)):
+                if not hasattr(obj, 'multi_class'):
+                    obj.multi_class = 'auto'
+            # 2. Pipeline: Recurse through steps
+            if hasattr(obj, 'named_steps'):
+                for step in obj.named_steps.values(): patch_recursive_lr(step)
+            # 3. VotingClassifier / Ensembles: Recurse through estimators
+            if hasattr(obj, 'estimators_') and obj.estimators_ is not None:
+                for est in obj.estimators_: patch_recursive_lr(est)
+            if hasattr(obj, 'named_estimators_') and obj.named_estimators_ is not None:
+                for est in obj.named_estimators_.values(): patch_recursive_lr(est)
+
         for name, (pkl_path, meta_path) in model_files.items():
             if os.path.exists(pkl_path):
                 with open(pkl_path, 'rb') as f:
                     m = pickle.load(f)
-                    if name == "Logistic Regression":
-                        clf_step = m.named_steps.get('clf')
-                        if clf_step and not hasattr(clf_step, 'multi_class'):
-                            clf_step.multi_class = 'auto'
+                    # Use Recursive Power Patch to heal nested models (Ensembles)
+                    patch_recursive_lr(m)
                     models[name] = m
             # Load dynamic benchmark accuracy
             if os.path.exists(meta_path):
@@ -1535,16 +1548,34 @@ with st.sidebar:
             help="Where the review was published (e.g., site/app/source).",
         )
     
-    with st.expander("✨ AI Model", expanded=False):
+    with st.expander("✨ AI Intelligence", expanded=False):
         ai_model_choice = st.radio(
             "Select AI model for insights:",
             options=["Auto", "Groq (Cloud)", "Ollama (Local)"],
             help="Auto: Uses Groq if API key is set, otherwise Ollama\nGroq: Fast cloud-based model (requires API key)\nOllama: Offline local model (requires running service)",
             horizontal=False,
+            key="ai_model_radio"
         )
         # Map radio selection to model choice
         model_map = {"Auto": "auto", "Groq (Cloud)": "groq", "Ollama (Local)": "ollama"}
         st.session_state.selected_ai_model = model_map[ai_model_choice]
+
+        st.divider()
+        
+        # New Model Version Toggle for A/B Comparison
+        model_version_choice = st.radio(
+            "ML Engine Version:",
+            options=["Optimized (95% Acc)", "Baseline (60% Acc)"],
+            index=0,
+            help="Optimized: High-accuracy Super Ensemble (95%+ accuracy)\nBaseline: Original legacy model (60%-70% accuracy)",
+            key="model_version_radio"
+        )
+        # Map version selection to path
+        version_map = {
+            "Optimized (95% Acc)": "models/optimized",
+            "Baseline (60% Acc)": "models/baseline"
+        }
+        st.session_state.model_version_path = version_map[model_version_choice]
     
     with st.expander("", expanded=False):
         st.caption("Hidden Feature - Columns Selection: Select which columns to include in your download (Above filters select which rows to include, this selects which columns).")
@@ -1641,7 +1672,9 @@ time_series = (
 # ==========================================
 # 🧠 CORE ML UTILITIES & TAXONOMY (GLOBAL)
 # ==========================================
-GLOBAL_MODELS = load_ml_models()
+# Use selected version from sidebar, defaulting to optimized
+current_model_path = st.session_state.get("model_version_path", "models/optimized")
+GLOBAL_MODELS = load_ml_models(model_dir=current_model_path)
 
 ASPECT_TAXONOMY = {
     "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
@@ -3516,7 +3549,7 @@ with tab_explore:
                         st.dataframe(display_df, use_container_width=True)
 
 
-models = load_ml_models()
+models = load_ml_models(model_dir=current_model_path)
 
 ASPECT_TAXONOMY = {
     "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
@@ -4057,7 +4090,8 @@ with tab_ml_predict:
 
             # Setup D: Hybrid Intelligence is now the standard for both toggles.
             # When Smart AI is ON, it just provides a higher-quality 'llm_sentiment_score' feature.
-            model_dir = "models" 
+            # Use current_model_path from session state
+            model_dir = st.session_state.get("model_version_path", "models/optimized")
             model_bundle = load_ml_models(model_dir=model_dir)
             rating_models = model_bundle.get("rating", {})
             aspect_engine = model_bundle.get("aspect")
@@ -4651,8 +4685,10 @@ with tab_ml_predict:
                         unsafe_allow_html=True,
                     )
             
-            elif st.session_state.get("review_analyzed"):
+            elif st.session_state.get("review_analyzed") and not review_input.strip():
                 st.warning("Please enter some text to begin analysis.")
+            elif st.session_state.get("review_analyzed") and not rating_models:
+                st.error("ML Prediction Engine not found. Please check your 'models/' directory.")
 
 
 

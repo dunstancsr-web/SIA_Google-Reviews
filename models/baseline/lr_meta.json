@@ -1,0 +1,15 @@
+{
+  "standard_test_accuracy": 0.366,
+  "smart_test_accuracy": 0.6623,
+  "test_accuracy": 0.6623,
+  "display_name": "Baseline LR",
+  "trained_at": "2026-04-06T16:41:05.080744",
+  "training_time_s": 0.7,
+  "feature_streams": 4,
+  "features": [
+    "clean_text",
+    "vader_min",
+    "has_negative_dealbreaker",
+    "llm_sentiment_score"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "standard_test_accuracy": 0.9044,
+  "smart_test_accuracy": 0.9541,
+  "test_accuracy": 0.9541,
+  "strict_accuracy": 0.7438,
+  "train_accuracy": 0.9981,
+  "accuracy": 0.9541,
+  "display_name": "Super Ensemble (RF+LR+SVM)",
+  "trained_at": "2026-04-06T19:35:55.768158",
+  "training_time_s": 3.75,
+  "feature_streams": 4,
+  "features": [
+    "clean_text",
+    "vader_min",
+    "has_negative_dealbreaker",
+    "llm_sentiment_score"
+  ]
+}

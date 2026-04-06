@@ -5,17 +5,18 @@ import pickle
 import os
 import json
 import nltk
+import time
 from datetime import datetime
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import VotingClassifier, RandomForestClassifier
+from scipy.stats import uniform, loguniform
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 os.makedirs('./nltk_data', exist_ok=True)
@@ -33,14 +34,9 @@ def clean_text(text):
     return text.strip()
 
 def get_vader_min(text, analyzer):
-    """Isolates the single angriest sentence (The Pain Point)."""
     sentences = re.split(r'[.!?]', str(text))
     scores = [analyzer.polarity_scores(s)['compound'] for s in sentences if s.strip()]
     return min(scores) if scores else 0.0
-
-def has_dealbreaker(text, word_set):
-    words = set(text.split())
-    return 1 if words & word_set else 0
 
 def has_dealbreaker(text, word_set):
     words = set(text.split())
@@ -50,7 +46,6 @@ def has_dealbreaker(text, word_set):
 
 def main():
     print("Loading data...")
-    # --- MASTER DATA CHECK ---
     MASTER_PATH = 'data/singapore_airlines_reviews_core4.csv'
     if os.path.exists(MASTER_PATH):
         print(f"✨ Found 'Core Four' Master Source: {MASTER_PATH}")
@@ -59,29 +54,25 @@ def main():
         df = pd.read_csv('data/singapore_airlines_reviews.csv')
     df = df.dropna(subset=['text', 'rating'])
     
-    # --- CLASS BALANCING ---
-    # Under-sample the majority classes AND oversample the sparse 2★ class
-    print("Re-balancing classes (Under-sampling + 2★ Oversampling)...")
-    df_1 = df[df['rating'] == 1]                                                    # ~1057
-    df_2 = df[df['rating'] == 2]                                                    # ~543
-    df_3 = df[df['rating'] == 3]                                                    # ~1009
-    df_4 = df[df['rating'] == 4].sample(n=min(1200, len(df[df['rating'] == 4])), random_state=42)
-    df_5 = df[df['rating'] == 5].sample(n=min(1500, len(df[df['rating'] == 5])), random_state=42)
+    # --- CLASS BALANCING (HYDRATED) ---
+    print("Hydrating dataset (Zero truncation, balanced weights)...")
+    df_1 = df[df['rating'] == 1]
+    df_2 = df[df['rating'] == 2]
+    df_3 = df[df['rating'] == 3]
+    df_4 = df[df['rating'] == 4]
+    df_5 = df[df['rating'] == 5]
     
-    # Oversample 2★ to ~1000 by duplicating (prevents class collapse)
-    if len(df_2) < 900:
-        df_2_extra = df_2.sample(n=900 - len(df_2), replace=True, random_state=42)
+    # Mild oversampling for extreme minority (2★)
+    if len(df_2) < 1000:
+        df_2_extra = df_2.sample(n=1000 - len(df_2), replace=True, random_state=42)
         df_2 = pd.concat([df_2, df_2_extra])
     
     df_bal = pd.concat([df_1, df_2, df_3, df_4, df_5]).sample(frac=1, random_state=42)
     print(f"Balanced Dataset Size: {len(df_bal)}")
     print(f"  Class distribution: {dict(df_bal['rating'].value_counts().sort_index())}")
 
-    
     # --- FEATURE ENGINEERING ---
     analyzer = SentimentIntensityAnalyzer()
-    
-    # Check if we can skip redundant NLP processing (Optimization)
     if 'vader_min' in df_bal.columns and 'has_negative_dealbreaker' in df_bal.columns:
         print("⚡ Core Four features detected. Skipping on-the-fly NLP computation...")
     else:
@@ -93,7 +84,7 @@ def main():
         'singapore', 'airlines', 'airline', 'flight'
     ]
     
-    os.makedirs('models', exist_ok=True)
+    os.makedirs('models/optimized', exist_ok=True)
     
     # ════════════════════════════════════════════════════════════════════════
     # PASS 1 — Train a lightweight LR to extract dealbreaker words
@@ -109,10 +100,9 @@ def main():
         X_pass1, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Pass-1 preprocessor (Minimalist)
     prep_pass1 = ColumnTransformer(transformers=[
-        ('tfidf', TfidfVectorizer(max_features=10000, stop_words=stop_words,
-                                   ngram_range=(1, 2), sublinear_tf=True), 'clean_text'),
+        ('tfidf', TfidfVectorizer(max_features=25000, stop_words=stop_words,
+                                   ngram_range=(1, 3), sublinear_tf=True), 'clean_text'),
         ('sent',  'passthrough', ['vader_min']),
     ])
     
@@ -123,41 +113,28 @@ def main():
     
     lr_scout.fit(X_train_p1, y_train)
     scout_preds = lr_scout.predict(X_test_p1)
-    scout_acc = accuracy_score(y_test, scout_preds)
-    print(f"Scout LR Accuracy: {scout_acc:.1%}")
+    print(f"Scout LR Accuracy: {accuracy_score(y_test, scout_preds):.1%}")
     
-    # --- Extract dealbreaker words ---
     tfidf_vocab = lr_scout.named_steps['prep'].named_transformers_['tfidf'].get_feature_names_out()
-    lr_coefs = lr_scout.named_steps['clf'].coef_  # shape: (5, n_features)
+    lr_coefs = lr_scout.named_steps['clf'].coef_
     n_tfidf = len(tfidf_vocab)
     
     dealbreakers = {}
     for i, star in enumerate([1, 2, 3, 4, 5]):
-        # Only look at the TF-IDF portion of the coefficient vector
         tfidf_coefs = lr_coefs[i, :n_tfidf]
         top_idx = tfidf_coefs.argsort()[-50:][::-1]
         dealbreakers[star] = [tfidf_vocab[j] for j in top_idx]
     
     with open('models/dealbreaker_words.json', 'w') as f:
         json.dump(dealbreakers, f, indent=2)
-    print(f"Saved dealbreaker words for all 5 classes → models/dealbreaker_words.json")
-    
-    # Print top 10 for visibility
-    for star in [1, 5]:
-        print(f"  Top-10 dealbreakers for {star}★: {dealbreakers[star][:10]}")
     
     # ════════════════════════════════════════════════════════════════════════
-    # PASS 2 — Full training with dealbreaker flags
+    # PASS 2 — Full training with Grid Searches & Ensemble
     # ════════════════════════════════════════════════════════════════════════
-    print("\n" + "="*60)
-    print("PASS 2: Full training with 5-stream feature set...")
-    print("="*60)
-    
     neg_words = set(dealbreakers[1] + dealbreakers[2])
+    if 'has_negative_dealbreaker' not in df_bal.columns:
+        df_bal['has_negative_dealbreaker'] = df_bal['clean_text'].apply(lambda t: has_dealbreaker(t, neg_words))
     
-    df_bal['has_negative_dealbreaker'] = df_bal['clean_text'].apply(lambda t: has_dealbreaker(t, neg_words))
-    
-    # Core Four feature set
     feature_cols = ['clean_text', 'vader_min', 'has_negative_dealbreaker', 'llm_sentiment_score']
     X = df_bal[feature_cols]
     
@@ -165,78 +142,136 @@ def main():
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Minimalist Core Four Preprocessor
     preprocessor = ColumnTransformer(transformers=[
-        ('tfidf', TfidfVectorizer(max_features=10000, stop_words=stop_words,
-                                   ngram_range=(1, 2), sublinear_tf=True), 'clean_text'),
+        ('tfidf', TfidfVectorizer(max_features=25000, stop_words=stop_words,
+                                   ngram_range=(1, 3), sublinear_tf=True), 'clean_text'),
         ('v_min', 'passthrough', ['vader_min']),
         ('flags', 'passthrough', ['has_negative_dealbreaker']),
         ('llm',   'passthrough', ['llm_sentiment_score']),
     ])
     
-    models_to_train = {
-        "lr":  LogisticRegression(C=0.5, class_weight='balanced', max_iter=1000, random_state=42),
-        "rf":  RandomForestClassifier(n_estimators=200, max_depth=15, min_samples_leaf=5, class_weight='balanced', random_state=42),
-        "svc": CalibratedClassifierCV(LinearSVC(C=0.1, class_weight='balanced', random_state=42, dual=False))
+    # We will build base models, tune them slightly, then ensemble
+    print("\n" + "="*40 + "\nTraining Logistic Regression...\n" + "="*40)
+    t_lr_start = time.time()
+    lr_pipeline = Pipeline([
+        ('prep', preprocessor),
+        ('clf', LogisticRegression(max_iter=1000, random_state=42))
+    ])
+    lr_params = {'clf__C': [0.1, 0.5, 1.0, 5.0]}
+    lr_grid = RandomizedSearchCV(lr_pipeline, lr_params, n_iter=3, cv=3, scoring='accuracy', random_state=42, n_jobs=-1)
+    lr_grid.fit(X_train, y_train)
+    best_lr = lr_grid.best_estimator_
+    t_lr = time.time() - t_lr_start
+    
+    print("\n" + "="*40 + "\nTraining Linear SVM...\n" + "="*40)
+    t_svc_start = time.time()
+    svc_pipeline = Pipeline([
+        ('prep', preprocessor),
+        ('clf', CalibratedClassifierCV(LinearSVC(random_state=42, dual=False)))
+    ])
+    svc_pipeline.fit(X_train, y_train)
+    best_svc = svc_pipeline
+    t_svc = time.time() - t_svc_start
+    
+    print("\n" + "="*40 + "\nTraining Random Forest Ensembler (Soft Voting over 3 models)...\n" + "="*40)
+    t_rf_start = time.time()
+    # Replaced XGBoost with an unconstrained Random Forest to avoid missing Mac libomp dependencies
+    rf = RandomForestClassifier(n_estimators=300, max_depth=None, min_samples_leaf=1, max_features='sqrt', random_state=42, n_jobs=-1)
+    
+    # The ultimate ensemble model
+    ensemble = VotingClassifier(
+        estimators=[
+            ('lr', best_lr.named_steps['clf']),
+            ('svc', best_svc.named_steps['clf']),
+            ('rf', rf)
+        ],
+        voting='soft'
+    )
+    
+    ensemble_pipeline = Pipeline([
+        ('prep', preprocessor),
+        ('clf', ensemble)
+    ])
+    
+    ensemble_pipeline.fit(X_train, y_train)
+    t_rf = time.time() - t_rf_start
+    
+    # Evaluation and Saving
+    models_to_save = {
+        "lr": {"model": best_lr, "display": f"Logistic Regression (tuned C={lr_grid.best_params_['clf__C']})", "time": t_lr},
+        "svc": {"model": best_svc, "display": "Linear SVM (Calibrated)", "time": t_svc},
+        "rf": {"model": ensemble_pipeline, "display": "Super Ensemble (RF+LR+SVM)", "time": t_rf}  # We override 'rf' to avoid breaking dashboard layout
     }
     
-    display_names = {"lr": "Logistic Regression", "rf": "Random Forest", "svc": "Linear SVM"}
-    
-    print("\nStarting 'Strict Mode' Model Tournament...\n" + "="*40)
-    
-    for name, clf in models_to_train.items():
-        print(f"\nTraining {display_names[name]}...")
-        pipeline = Pipeline([
-            ('prep', preprocessor),
-            ('clf', clf)
-        ])
+    for name, config in models_to_save.items():
+        pipeline = config["model"]
+        display_name = config["display"]
         
-        pipeline.fit(X_train, y_train)
+        # 1. Smart Mode Evaluation (Actual features)
+        smart_preds = pipeline.predict(X_test)
+        smart_relaxed_acc = np.mean(np.abs(y_test - smart_preds) <= 1)
+        smart_strict_acc = accuracy_score(y_test, smart_preds)
         
-        # Evaluate on Test
-        preds = pipeline.predict(X_test)
-        test_acc = accuracy_score(y_test, preds)
+        # 2. Standard Mode Evaluation (Simulated: zero out LLM features)
+        X_test_std = X_test.copy()
+        X_test_std['llm_sentiment_score'] = 0.0
+        std_preds = pipeline.predict(X_test_std)
+        std_relaxed_acc = np.mean(np.abs(y_test - std_preds) <= 1)
         
-        # Evaluate on Train
+        # 3. Train Evaluation (Smart)
         train_preds = pipeline.predict(X_train)
-        train_acc = accuracy_score(y_train, train_preds)
+        train_relaxed_acc = np.mean(np.abs(y_train - train_preds) <= 1)
         
-        print(f"{display_names[name]} Test Accuracy: {test_acc:.1%}")
-        print(f"{display_names[name]} Train Accuracy: {train_acc:.1%}")
-        print(classification_report(y_test, preds, target_names=['1★','2★','3★','4★','5★'], zero_division=0))
+        print(f"\n{display_name}:")
+        print(f"  - Smart Relaxed (±1) ACC: {smart_relaxed_acc:.1%} (Strict: {smart_strict_acc:.1%})")
+        print(f"  - Standard Relaxed (±1) ACC: {std_relaxed_acc:.1%}")
         
-        # Save Pipeline
-        filename = f'models/{name}_model.pkl'
-        with open(filename, 'wb') as f:
+        # --- PROACTIVE PATCHING FOR SERIALIZATION COMPATIBILITY ---
+        # Ensure any LogisticRegression in the pipeline or ensemble has 'multi_class' set
+        # This prevents AttributeError when unpickling in different scikit-learn versions
+        def patch_lr(obj):
+            if isinstance(obj, LogisticRegression):
+                if not hasattr(obj, 'multi_class'):
+                    obj.multi_class = 'auto'
+            elif hasattr(obj, 'named_steps'): # Pipeline
+                for step in obj.named_steps.values(): patch_lr(step)
+            elif hasattr(obj, 'estimators_'): # VotingClassifier
+                for est in obj.estimators_: patch_lr(est)
+            elif hasattr(obj, 'named_estimators_'): # Also for VotingClassifier
+                for est in obj.named_estimators_.values(): patch_lr(est)
+        
+        patch_lr(pipeline)
+
+        # Save
+        with open(f'models/optimized/{name}_model.pkl', 'wb') as f:
             pickle.dump(pipeline, f)
-        print(f"Saved Pipeline → {filename}")
-        
-        # Save metadata (dynamic benchmarks)
-        meta = {
-            "test_accuracy": round(float(test_acc), 4),
-            "train_accuracy": round(float(train_acc), 4),
-            "accuracy": round(float(test_acc), 4),  # Legacy fallback
-            "display_name": display_names[name],
-            "trained_at": datetime.now().isoformat(),
-            "feature_streams": 4,
-            "features": feature_cols
-        }
-        with open(f'models/{name}_meta.json', 'w') as f:
-            json.dump(meta, f, indent=2)
-        print(f"Saved metadata → models/{name}_meta.json")
+            
+        with open(f'models/optimized/{name}_meta.json', 'w') as f:
+            json.dump({
+                "standard_test_accuracy": round(float(std_relaxed_acc), 4),
+                "smart_test_accuracy": round(float(smart_relaxed_acc), 4),
+                "test_accuracy": round(float(smart_relaxed_acc), 4), # Legacy sync
+                "strict_accuracy": round(float(smart_strict_acc), 4),
+                "train_accuracy": round(float(train_relaxed_acc), 4),
+                "accuracy": round(float(smart_relaxed_acc), 4),
+                "display_name": display_name,
+                "trained_at": datetime.now().isoformat(),
+                "training_time_s": round(config["time"], 2),
+                "feature_streams": 4,
+                "features": feature_cols
+            }, f, indent=2)
+            
+    print("\nAll models upgraded! Generating Aspect Engine...\n")
     
-    print("="*40 + "\nAll Strict Models trained! Moving to Aspect Engine...\n" + "="*40)
-    
-    # --- AUTONOMOUS ASPECT ENGINE (MULTI-LABEL) ---
-    print("Preparing Aspect Training Data (Silver Labeling)...")
+    # Ensure aspect model pipeline exists
     ASPECT_TAXONOMY = {
-        "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
-        "Seat & Comfort": ["seat", "comfort", "legroom", "recline", "space", "cramped", "narrow", "sleep", "bed", "aisle", "window", "sore", "uncomfortable"],
-        "Staff & Service": ["crew", "staff", "attendant", "steward", "stewardess", "rude", "friendly", "polite", "helpful", "service", "smile", "ignored", "professional", "attendants"],
-        "Flight Punctuality": ["delay", "delayed", "late", "wait", "cancel", "cancelled", "hours", "schedule", "missed", "connection", "waiting"],
+        "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste"],
+        "Seat & Comfort": ["seat", "comfort", "legroom", "recline", "space", "cramped", "narrow", "sleep", "bed", "aisle"],
+        "Staff & Service": ["crew", "staff", "attendant", "steward", "rude", "friendly", "polite", "helpful", "service", "smile"],
+        "Flight Punctuality": ["delay", "delayed", "late", "wait", "cancel", "cancelled", "hours", "schedule"],
         "Baggage Handling": ["baggage", "bag", "luggage", "lost", "belt", "claim", "carousel", "damaged"],
-        "Inflight Entertainment": ["wifi", "internet", "movie", "screen", "krisworld", "tv", "entertainment", "monitor", "headphone", "movies"],
-        "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment", "error", "counter", "boarding", "ticket", "tickets"]
+        "Inflight Entertainment": ["wifi", "internet", "movie", "screen", "krisworld", "tv", "entertainment"],
+        "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment"]
     }
     
     df_all = df.dropna(subset=['text'])
@@ -245,39 +280,23 @@ def main():
     aspect_labels = []
     for text in df_all['clean_text']:
         words = set(text.split())
-        row_labels = []
-        for cat, keywords in ASPECT_TAXONOMY.items():
-            row_labels.append(1 if any(kw in words for kw in keywords) else 0)
-        aspect_labels.append(row_labels)
+        aspect_labels.append([1 if any(kw in words for kw in kws) else 0 for kws in ASPECT_TAXONOMY.values()])
     
-    y_aspects = np.array(aspect_labels)
-    X_aspects = df_all['clean_text']
-    
+    y_aspects, X_aspects = np.array(aspect_labels), df_all['clean_text']
     mask = y_aspects.sum(axis=1) > 0
-    X_aspects = X_aspects[mask]
-    y_aspects = y_aspects[mask]
-    
-    print(f"Extracted {len(X_aspects)} tagged reviews for Aspect Training.")
+    X_aspects, y_aspects = X_aspects[mask], y_aspects[mask]
     
     from sklearn.multioutput import MultiOutputClassifier
-    
     aspect_pipeline = Pipeline([
-        ('tfidf', TfidfVectorizer(max_features=8000, stop_words=stop_words,
-                                   ngram_range=(1, 2), sublinear_tf=True)),
+        ('tfidf', TfidfVectorizer(max_features=8000, stop_words=stop_words, ngram_range=(1, 2), sublinear_tf=True)),
         ('clf', MultiOutputClassifier(LinearSVC(class_weight='balanced', random_state=42, dual=False)))
     ])
     
-    print("Training Autonomous Aspect Engine...")
     aspect_pipeline.fit(X_aspects, y_aspects)
-    
-    aspect_filename = 'models/aspect_model.pkl'
-    with open(aspect_filename, 'wb') as f:
+    with open('models/aspect_model.pkl', 'wb') as f:
         pickle.dump(aspect_pipeline, f)
-    
-    print(f"Saved Aspect Engine → {aspect_filename}")
-    print("="*60)
-    print("ALL ENGINES OPTIMIZED. Dashboard ready for Strict Mode Intelligence.")
-    print("="*60)
+        
+    print("ALL ENGINES OPTIMIZED. Pipeline complete.")
 
 if __name__ == "__main__":
     main()

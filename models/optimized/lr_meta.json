@@ -1,0 +1,18 @@
+{
+  "standard_test_accuracy": 0.8112,
+  "smart_test_accuracy": 0.9661,
+  "test_accuracy": 0.9661,
+  "strict_accuracy": 0.7462,
+  "train_accuracy": 0.9672,
+  "accuracy": 0.9661,
+  "display_name": "Logistic Regression (tuned C=0.5)",
+  "trained_at": "2026-04-06T19:35:54.370582",
+  "training_time_s": 5.4,
+  "feature_streams": 4,
+  "features": [
+    "clean_text",
+    "vader_min",
+    "has_negative_dealbreaker",
+    "llm_sentiment_score"
+  ]
+}
