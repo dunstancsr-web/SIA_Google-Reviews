@@ -1,0 +1,22 @@
+{
+"suggested_response": "Sorry to hear that your experience with Singapore Airlines didn't meet your expectations.",
+"strategic_steps": [
+    "Investigate the issue of late and disorganized boarding",
+    "Upgrade or replace outdated aircraft features such as entertainment systems",
+    "Improve food and beverage options",
+    "Enhance staff training for friendliness and professionalism"
+],
+"overall_sentiment_score": -0.5,
+"segment_tagging_results": [
+    {
+        "id": 1,
+        "topics": ["Flight Punctuality", "Inflight Entertainment"],
+        "sentiment": "Negative"
+    },
+    {
+        "id": 2,
+        "topics": ["Food & Beverage", "Staff & Service"],
+        "sentiment": "Negative"
+    }
+]
+}

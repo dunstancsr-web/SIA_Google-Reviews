@@ -1710,9 +1710,6 @@ time_series = (
 # ==========================================
 # 🧠 CORE ML UTILITIES & TAXONOMY (GLOBAL)
 # ==========================================
-# Use selected version from sidebar, defaulting to optimized
-current_model_path = st.session_state.get("model_version_path", "models/optimized")
-GLOBAL_MODELS = load_ml_models(model_dir=current_model_path)
 
 ASPECT_TAXONOMY = {
     "Food & Beverage": ["food", "meal", "drink", "water", "wine", "chicken", "beef", "breakfast", "lunch", "dinner", "taste", "menu", "beverage", "hungry", "thirsty"],
@@ -1724,9 +1721,12 @@ ASPECT_TAXONOMY = {
     "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment", "error", "counter", "boarding", "ticket", "tickets"]
 }
 
+# Use selected version from sidebar, defaulting to optimized
+current_model_path = st.session_state.get("model_version_path", "models/optimized")
+GLOBAL_MODELS = load_ml_models(model_dir=current_model_path)
+
 def extract_aspect_tags(text, use_llm=True):
     analyzer = get_vader_analyzer()
-    # Split text keeping delimiters to reconstruct original text
     segments = re.split(r'([.!?\n]+)', text)
     analysis_meta = {
         "engine_label": "Standard ML + VADER",
@@ -1737,9 +1737,12 @@ def extract_aspect_tags(text, use_llm=True):
         "proxy_mode": not use_llm, 
     }
     
-    # --- CONTEXT-AWARE LLM UPGRADE ---
-    llm_sentiments = {} # Dictionary mapping segment index -> (topics_list, sentiment_score)
+    agent_guidance = {
+        "suggested_response": "",
+        "strategic_steps": []
+    }
     
+    llm_sentiments = {}
     model_choice = st.session_state.get("selected_ai_model", "auto")
     api_key = os.environ.get("GROQ_API_KEY", "")
     use_groq = (model_choice == "groq" and api_key) or (model_choice == "auto" and api_key)
@@ -1764,21 +1767,30 @@ def extract_aspect_tags(text, use_llm=True):
                     valid_sentences.append({"id": idx, "text": seg.strip()})
                     
         if valid_sentences:
-            prompt = (
-                "You are a specialized aviation data parser. Respond ONLY with a valid JSON. No preamble. No markdown. No explanations.\n\n"
-                "STRICT OUTPUT SCHEMA:\n"
-                '{"overall_sentiment": float (-1.0 to 1.0), "annotations": [{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]}\n\n'
-                "TAXONOMY RULES:\n"
-                "1. Use ONLY these topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
-                "2. EXPLICIT COMPETITOR MENTIONS: If they praise a competitor (e.g., 'Emirates has better seats'), that is a 'Negative' sentiment for SIA.\n"
-                "3. SARCASM: Phrases like 'Thanks for the 5-hour wait' are 'Negative'.\n"
-                "4. FACTUAL: If no topic is mentioned, return [].\n\n"
-                "ONE-SHOT EXAMPLE:\n"
-                '{"overall_sentiment": 0.85, "annotations": [{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]}\n\n'
-                "INPUT DATA:\n"
-            )
-            prompt += json.dumps(valid_sentences)
-
+            # --- HUMAN-SPEAK JSON PROMPT ---
+            compact_taxonomy = list(ASPECT_TAXONOMY.keys()) if isinstance(ASPECT_TAXONOMY, dict) else ASPECT_TAXONOMY
+            full_text = " ".join([s["text"] for s in valid_sentences])
+            categories_str = ", ".join(compact_taxonomy)
+            
+            prompt = f"""
+            Analyze this Singapore Airlines review and return a valid JSON object.
+            
+            REVIEW: "{full_text}"
+            
+            TAXONOMY: {categories_str}
+            
+            OUTPUT SCHEMA:
+            {{
+              "suggested_response": "2-sentence empathetic SIA reply",
+              "strategic_steps": ["List of follow-up actions"],
+              "overall_sentiment_score": float between -1.0 and 1.0,
+              "segment_tagging_results": [
+                 {{"id": 0, "topics": ["Category"], "sentiment": "Positive/Negative/Neutral"}}
+              ]
+            }}
+            
+            Return ONLY raw JSON. No preamble.
+            """
             
             try:
                 llm_out = ""
@@ -1786,179 +1798,126 @@ def extract_aspect_tags(text, use_llm=True):
                     from groq import Groq
                     client = Groq(api_key=api_key)
                     resp = client.chat.completions.create(
-                        messages=[{"role": "system", "content": "You are a JSON API. Output ONLY a raw JSON object. No preamble, no markdown code blocks."}, {"role": "user", "content": prompt}],
+                        messages=[{"role": "system", "content": "Return ONLY raw JSON."}, {"role": "user", "content": prompt}],
                         model="llama-3.1-8b-instant", temperature=0
                     )
                     llm_out = resp.choices[0].message.content or ""
                 else:
                     import requests
-                    res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output raw JSON object only. No preamble, no backticks.", "stream": False}, timeout=60)
-                    if res.status_code != 200:
-                        raise Exception(f"Ollama returned {res.status_code}: {res.text}")
+                    res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Return ONLY raw JSON.", "stream": False}, timeout=60)
                     llm_out = res.json().get("response", "") or ""
 
-                llm_out = str(llm_out)
-                if not llm_out.strip():
-                    raise Exception("LLM returned an entirely blank string.")
-                    
-                # Robust JSON Extraction (Ignore preambles and markdown blocks)
+                # DIAGNOSTIC LOGGING: Save the raw LLM output for developer inspection
+                try:
+                    with open("llm_synthesis_debug.json", "w", encoding="utf-8") as debug_file:
+                        debug_file.write(llm_out)
+                except:
+                    pass
+
+                # FLEXIBLE SYNTHESIS-FIRST PARSER
                 match_obj = re.search(r'(\{.*\}|\[.*\])', llm_out, re.DOTALL)
-                if match_obj:
-                    clean_json = match_obj.group(1)
-                else:
-                    clean_json = llm_out # Fallback to raw
-
-                def _normalize_json_text(raw_text):
-                    txt = raw_text.strip()
-                    # Handle Unicode quotes
-                    txt = txt.replace("\u201c", '"').replace("\u201d", '"')
-                    txt = txt.replace("\u2018", "'").replace("\u2019", "'")
-                    # Remove trailing commas
-                    txt = re.sub(r",\s*([}\]])", r"\1", txt)
-                    # Quote common bare keys
-                    txt = re.sub(r'([{,]\s*)(id|topics|sentiment|overall_sentiment|annotations)(\s*:)', r'\1"\2"\3', txt)
-                    return txt
-
-                annotations = None
-                parse_attempts = [clean_json, _normalize_json_text(clean_json)]
-
-                for attempt in parse_attempts:
+                clean_json = match_obj.group(1) if match_obj else llm_out
+                clean_json = clean_json.strip('`').strip('json').strip()
+                
+                try:
+                    annotations_data = json.loads(clean_json)
+                except json.JSONDecodeError:
+                    clean_json_relaxed = re.sub(r'[^\x20-\x7e]', '', clean_json)
+                    # Attempt a final rescue if double quotes are missing on property names
                     try:
-                        annotations = json.loads(attempt)
-                        break
-                    except json.JSONDecodeError:
-                        pass
-
-                if annotations is None:
-                    raise ValueError("Malformed JSON payload from LLM")
+                        annotations_data = json.loads(clean_json_relaxed)
+                    except:
+                        # Fallback for some common LLM malformed syntax
+                        import ast
+                        try:
+                            # Use ast.literal_eval if it looks like a python dict (sometimes LLM does this)
+                            annotations_data = ast.literal_eval(clean_json_relaxed)
+                        except:
+                            annotations_data = {}
                 
-                # Handle Case: LLM returns just the array instead of the object
-                if isinstance(annotations, list):
-                    annotations = {"overall_sentiment": 0.0, "annotations": annotations}
+                # Update Synthesis
+                s_resp = annotations_data.get("suggested_response") or annotations_data.get("Response") or ""
+                s_steps = annotations_data.get("strategic_steps") or annotations_data.get("next_steps") or []
+                agent_guidance = {
+                    "suggested_response": s_resp,
+                    "strategic_steps": s_steps if isinstance(s_steps, list) else [str(s_steps)]
+                }
                 
-                llm_global_score = float(annotations.get("overall_sentiment", 0.0))
-                llm_ann_list = annotations.get("annotations", [])
+                # Update Mood & Global Score
+                llm_global_score = float(annotations_data.get("overall_sentiment_score", 0.0))
                 
-                for ann in llm_ann_list:
-                    sent_str = ann.get("sentiment", "Neutral")
-                    score = 0.0
-                    if "positive" in sent_str.lower(): score = 0.5
-                    elif "negative" in sent_str.lower(): score = -0.5
+                # Update Granular Annotations (evidence mapping)
+                tag_results = annotations_data.get("segment_tagging_results") or annotations_data.get("annotations") or []
+                for ann in tag_results:
+                    sent_str = str(ann.get("sentiment", "Neutral")).lower()
+                    score = 0.5 if "positive" in sent_str else (-0.5 if "negative" in sent_str else 0.0)
                     llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
-                
-                if llm_sentiments or llm_global_score != 0.0:
-                    analysis_meta["llm_used"] = True
-                    analysis_meta["llm_global_score"] = llm_global_score
-                    analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
+
+                analysis_meta["llm_used"] = True
+                analysis_meta["llm_global_score"] = llm_global_score
+                analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
             except Exception as e:
-                st.toast("LLM output format issue detected. Using standard local routing.", icon="⚠️")
-                analysis_meta["engine_label"] = "Standard ML + VADER"
-                analysis_meta["engine_tier"] = "Local"
-                analysis_meta["status"] = "Fallback activated: local routing engine"
-    # ----------------------------------
+                st.toast(f"LLM Structure Issue: {str(e)[:40]}", icon="⚠️")
     
     aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
     aspect_lengths = {category: 0.0 for category in ASPECT_TAXONOMY}
     aspect_mentions = {category: 0 for category in ASPECT_TAXONOMY}
-    sentiment_lengths = {"Positive": 0, "Negative": 0, "Neutral": 0}
     sentiment_counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
-    general_length = 0
-    
     highlighted_html = []
-    
-    # Get models for inference (using standard keys from load_ml_models)
     aspect_engine = GLOBAL_MODELS.get("aspect")
     
     for idx, segment in enumerate(segments):
         if not segment.strip() or re.fullmatch(r'[.!?\n]+', segment):
-            clean_seg = html.escape(segment).replace('\n', '<br>')
-            highlighted_html.append(clean_seg)
+            highlighted_html.append(html.escape(segment).replace('\n', '<br>'))
             continue
             
         words = set(re.findall(r'\b\w+\b', segment.lower()))
-        if not words:
-            highlighted_html.append(html.escape(segment))
-            continue
-        
-        sent_len = len(segment)
         matched_cats = []
         sent_score = 0.0
         
-        # Fetch contextual tags from LLM dict first
         if idx in llm_sentiments:
             topics, sent_score = llm_sentiments[idx]
             for t in topics:
                 for key in ASPECT_TAXONOMY.keys():
                     if t.lower().replace("&", "") in key.lower().replace("&", ""):
                         if key not in matched_cats: matched_cats.append(key)
-                        
-        if not matched_cats and idx not in llm_sentiments:
+        else:
             sent_score = analyzer.polarity_scores(segment)['compound']
-            
-            # --- AUTONOMOUS ML ENGINE ---
             if aspect_engine:
                 try:
                     pred_binary = aspect_engine.predict([segment.lower()])[0]
                     categories_list = list(ASPECT_TAXONOMY.keys())
                     for i, val in enumerate(pred_binary):
-                        if val == 1:
-                            matched_cats.append(categories_list[i])
-                except:
-                    pass
-            
+                        if val == 1: matched_cats.append(categories_list[i])
+                except: pass
             if not matched_cats:
                 for category, keywords in ASPECT_TAXONOMY.items():
-                    if any(kw in words for kw in keywords):
-                        matched_cats.append(category)
+                    if any(kw in words for kw in keywords): matched_cats.append(category)
         
-        if sent_score > 0.1:
-            sentiment_counts["Positive"] += 1
-        elif sent_score < -0.1:
-            sentiment_counts["Negative"] += 1
-        else:
-            sentiment_counts["Neutral"] += 1
-        
-        segment_safe = html.escape(segment)
+        if sent_score > 0.1: sentiment_counts["Positive"] += 1
+        elif sent_score < -0.1: sentiment_counts["Negative"] += 1
+        else: sentiment_counts["Neutral"] += 1
         
         if matched_cats:
-            split_len = sent_len / len(matched_cats)
             for cat in matched_cats:
                 aspect_scores[cat].append(sent_score)
-                aspect_lengths[cat] += split_len
                 aspect_mentions[cat] += 1
-                
-            tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px; white-space: nowrap;'>{c}</span>" for c in matched_cats])
-            
-            bg_color = "#f3f4f6"
-            border_color = "#e5e7eb"
-            if sent_score > 0.1:
-                bg_color = "#dcfce7"; border_color = "#bbf7d0"
-            elif sent_score < -0.1:
-                bg_color = "#fee2e2"; border_color = "#fecaca"
-                
-            highlight = f"<span style='background-color: {bg_color}; border: 1px solid {border_color}; padding: 2px 4px; border-radius: 6px; line-height: 2.2;'>{segment_safe}{tags_html}</span>"
-            highlighted_html.append(highlight)
+            tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px;'>{c}</span>" for c in matched_cats])
+            bg = "#dcfce7" if sent_score > 0.1 else ("#fee2e2" if sent_score < -0.1 else "#f3f4f6")
+            highlighted_html.append(f"<span style='background-color: {bg}; padding: 2px 4px; border-radius: 6px;'>{html.escape(segment)}{tags_html}</span>")
         else:
-            general_length += sent_len
-            highlighted_html.append(segment_safe)
+            highlighted_html.append(html.escape(segment))
     
     final_tags = []
     distribution = []
-    
+    mention_total = sum(aspect_mentions.values())
     for category, scores in aspect_scores.items():
         if scores:
-            avg_score = sum(scores) / len(scores)
-            if avg_score > 0.05: final_tags.append(f"🟢 {category}")
-            elif avg_score < -0.05: final_tags.append(f"🔴 {category}")
-            else: final_tags.append(f"⚪ {category}")
-            
+            avg = sum(scores) / len(scores)
+            final_tags.append(f"{'🟢' if avg > 0.05 else ('🔴' if avg < -0.05 else '⚪')} {category}")
         if aspect_mentions[category] > 0:
-            distribution.append({"Topic": category, "Count": aspect_mentions[category]})
+            distribution.append({"Topic": category, "Count": aspect_mentions[category], "Share (%)": aspect_mentions[category] / mention_total})
             
-    mention_total = sum(aspect_mentions.values())
-    for row in distribution:
-        row["Share (%)"] = (row["Count"] / mention_total) if mention_total else 0
-    
     sent_distribution = []
     sentiment_total = sum(sentiment_counts.values())
     for sent_type, s_count in sentiment_counts.items():
@@ -1972,7 +1931,7 @@ def extract_aspect_tags(text, use_llm=True):
         final_llm_score = analyzer.polarity_scores(text)['compound']
         analysis_meta["status"] = "Active: VADER Proxy (LLM-Off mode)"
     
-    return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta, final_llm_score
+    return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta, final_llm_score, agent_guidance
 
 tab_ml_predict, tab_overview, tab_explore, tab_export = st.tabs(
     ["🔍 Review Analyzer", "Overview", "Data Exploration", "Data & Export"]
@@ -3599,284 +3558,6 @@ ASPECT_TAXONOMY = {
     "Booking & Check-in": ["website", "app", "check-in", "checkin", "online", "booking", "system", "payment", "error", "counter", "boarding", "ticket", "tickets"]
 }
 
-def extract_aspect_tags(text, use_llm=True):
-    analyzer = get_vader_analyzer()
-    # Split text keeping delimiters to reconstruct original text
-    segments = re.split(r'([.!?\n]+)', text)
-    analysis_meta = {
-        "engine_label": "Standard ML + VADER",
-        "engine_tier": "Local",
-        "status": "Using local routing engine",
-        "llm_attempted": False,
-        "llm_used": False,
-        "proxy_mode": not use_llm, 
-    }
-    
-    # --- CONTEXT-AWARE LLM UPGRADE ---
-    llm_sentiments = {} # Dictionary mapping segment index -> (topics_list, sentiment_score)
-    
-    model_choice = st.session_state.get("selected_ai_model", "auto")
-    api_key = os.environ.get("GROQ_API_KEY", "")
-    use_groq = (model_choice == "groq" and api_key) or (model_choice == "auto" and api_key)
-    use_ollama = (model_choice == "ollama") or (model_choice == "auto" and not api_key)
-    
-    if use_llm and (use_groq or use_ollama):
-        analysis_meta["llm_attempted"] = True
-        if use_groq:
-            analysis_meta["engine_label"] = "Groq Hybrid AI"
-            analysis_meta["engine_tier"] = "Cloud"
-            analysis_meta["status"] = "Using Groq for Hybrid Nuance Mapping"
-        elif use_ollama:
-            analysis_meta["engine_label"] = "Ollama Hybrid AI"
-            analysis_meta["engine_tier"] = "Local LLM"
-            analysis_meta["status"] = "Using Ollama for Hybrid Nuance Mapping"
-
-        valid_sentences = []
-        for idx, seg in enumerate(segments):
-            if seg.strip() and not re.fullmatch(r'[.!?\n]+', seg):
-                words = set(re.findall(r'\b\w+\b', seg.lower()))
-                if words:
-                    valid_sentences.append({"id": idx, "text": seg.strip()})
-                    
-        if valid_sentences:
-            prompt = (
-                "You are a specialized aviation data parser. Respond ONLY with a valid JSON. No preamble. No markdown. No explanations.\n\n"
-                "STRICT OUTPUT SCHEMA:\n"
-                '{"overall_sentiment": float (-1.0 to 1.0), "annotations": [{"id": integer, "topics": array of strings, "sentiment": "Positive"|"Negative"|"Neutral"}]}\n\n'
-                "TAXONOMY RULES:\n"
-                "1. Use ONLY these topics: ['Food & Beverage', 'Seat & Comfort', 'Staff & Service', 'Flight Punctuality', 'Baggage Handling', 'Inflight Entertainment', 'Booking & Check-in'].\n"
-                "2. EXPLICIT COMPETITOR MENTIONS: If they praise a competitor (e.g., 'Emirates has better seats'), that is a 'Negative' sentiment for SIA.\n"
-                "3. SARCASM: Phrases like 'Thanks for the 5-hour wait' are 'Negative'.\n"
-                "4. FACTUAL: If no topic is mentioned, return [].\n\n"
-                "ONE-SHOT EXAMPLE:\n"
-                '{"overall_sentiment": 0.85, "annotations": [{"id": 0, "topics": ["Food & Beverage"], "sentiment": "Positive"}, {"id": 1, "topics": [], "sentiment": "Neutral"}]}\n\n'
-                "INPUT DATA:\n"
-            )
-            prompt += json.dumps(valid_sentences)
-
-            
-            try:
-                llm_out = ""
-                if use_groq:
-                    from groq import Groq
-                    client = Groq(api_key=api_key)
-                    resp = client.chat.completions.create(
-                        messages=[{"role": "system", "content": "You are a JSON API. Output ONLY a raw JSON object. No preamble, no markdown code blocks."}, {"role": "user", "content": prompt}],
-                        model="llama-3.1-8b-instant", temperature=0
-                    )
-                    llm_out = resp.choices[0].message.content or ""
-                else:
-                    import requests
-                    res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Output raw JSON object only. No preamble, no backticks.", "stream": False}, timeout=60)
-                    if res.status_code != 200:
-                        raise Exception(f"Ollama returned {res.status_code}: {res.text}")
-                    llm_out = res.json().get("response", "") or ""
-
-                llm_out = str(llm_out)
-                if not llm_out.strip():
-                    raise Exception("LLM returned an entirely blank string.")
-                    
-                # Robust JSON Extraction (Ignore preambles and markdown blocks)
-                # Finds the first '{' and the last '}'
-                match_obj = re.search(r'(\{.*\}|\[.*\])', llm_out, re.DOTALL)
-                if match_obj:
-                    clean_json = match_obj.group(1)
-                else:
-                    clean_json = llm_out # Fallback to raw
-
-                def _normalize_json_text(raw_text):
-                    txt = raw_text.strip()
-                    # Handle Unicode quotes
-                    txt = txt.replace("\u201c", '"').replace("\u201d", '"')
-                    txt = txt.replace("\u2018", "'").replace("\u2019", "'")
-                    # Remove trailing commas
-                    txt = re.sub(r",\s*([}\]])", r"\1", txt)
-                    # Quote common bare keys
-                    txt = re.sub(r'([{,]\s*)(id|topics|sentiment|overall_sentiment|annotations)(\s*:)', r'\1"\2"\3', txt)
-                    return txt
-
-                annotations = None
-                parse_attempts = [clean_json, _normalize_json_text(clean_json)]
-
-                for attempt in parse_attempts:
-                    try:
-                        annotations = json.loads(attempt)
-                        break
-                    except json.JSONDecodeError:
-                        pass
-
-                if annotations is None:
-                    raise ValueError("Malformed JSON payload from LLM")
-                
-                # Handle Case: LLM returns just the array instead of the object
-                if isinstance(annotations, list):
-                    # Self-healing: Wrap the array into the expected dict structure
-                    annotations = {"overall_sentiment": 0.0, "annotations": annotations}
-                    analysis_meta["status"] = "Adaptive Recovery: JSON Array mapped to Object"
-                
-                llm_global_score = float(annotations.get("overall_sentiment", 0.0))
-                llm_ann_list = annotations.get("annotations", [])
-                
-                for ann in llm_ann_list:
-                    sent_str = ann.get("sentiment", "Neutral")
-                    score = 0.0
-                    if "positive" in sent_str.lower(): score = 0.5
-                    elif "negative" in sent_str.lower(): score = -0.5
-                    llm_sentiments[ann.get("id")] = (ann.get("topics", []), score)
-                
-                if llm_sentiments or llm_global_score != 0.0:
-                    analysis_meta["llm_used"] = True
-                    analysis_meta["llm_global_score"] = llm_global_score
-                    analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
-            except Exception as e:
-                st.toast("LLM output format issue detected. Using standard local routing.", icon="⚠️")
-                with st.expander("🛠️ LLM Debug Trace (Raw Output)", expanded=False):
-                    st.code(llm_out, language="text")
-                    st.error(f"Error: {str(e)}")
-                analysis_meta["engine_label"] = "Standard ML + VADER"
-                analysis_meta["engine_tier"] = "Local"
-                analysis_meta["status"] = "Fallback activated: local routing engine"
-                pass # Fallback cleanly to VADER lexicons if LLM fails
-    # ----------------------------------
-    
-    aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
-    aspect_lengths = {category: 0.0 for category in ASPECT_TAXONOMY}
-    aspect_mentions = {category: 0 for category in ASPECT_TAXONOMY}
-    sentiment_lengths = {"Positive": 0, "Negative": 0, "Neutral": 0}
-    sentiment_counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
-    general_length = 0
-    
-    highlighted_html = []
-    
-    for idx, segment in enumerate(segments):
-        if not segment.strip() or re.fullmatch(r'[.!?\n]+', segment):
-            # Replace pure newlines with <br> for HTML rendering, escape others
-            clean_seg = html.escape(segment).replace('\n', '<br>')
-            highlighted_html.append(clean_seg)
-            continue
-            
-        words = set(re.findall(r'\b\w+\b', segment.lower()))
-        if not words:
-            highlighted_html.append(html.escape(segment))
-            continue
-        
-        sent_len = len(segment)
-        matched_cats = []
-        sent_score = 0.0
-        
-        # Fetch contextual tags from LLM dict first
-        if idx in llm_sentiments:
-            topics, sent_score = llm_sentiments[idx]
-            for t in topics:
-                for key in ASPECT_TAXONOMY.keys():
-                    if t.lower().replace("&", "") in key.lower().replace("&", ""):
-                        if key not in matched_cats: matched_cats.append(key)
-                        
-        # If LLM failed, missed it, or wasn't used, fallback to Autonomous ML Engine or Keyword matching
-        if not matched_cats and idx not in llm_sentiments:
-            sent_score = analyzer.polarity_scores(segment)['compound']
-            
-            # --- AUTONOMOUS ML ENGINE UPGRADE ---
-            if aspect_engine:
-                # Multi-label prediction
-                try:
-                    # The model expects a list/Series of strings
-                    pred_binary = aspect_engine.predict([segment.lower()])[0]
-                    categories_list = list(ASPECT_TAXONOMY.keys())
-                    for i, val in enumerate(pred_binary):
-                        if val == 1:
-                            matched_cats.append(categories_list[i])
-                except:
-                    pass
-            
-            # Final fallback to standard keywords if ML engine failed or is missing
-            if not matched_cats:
-                for category, keywords in ASPECT_TAXONOMY.items():
-                    if any(kw in words for kw in keywords):
-                        matched_cats.append(category)
-        
-        # Track sentiment distribution lengths
-        if sent_score > 0.1:
-            sentiment_lengths["Positive"] += sent_len
-            sentiment_counts["Positive"] += 1
-        elif sent_score < -0.1:
-            sentiment_lengths["Negative"] += sent_len
-            sentiment_counts["Negative"] += 1
-        else:
-            sentiment_lengths["Neutral"] += sent_len
-            sentiment_counts["Neutral"] += 1
-        
-        segment_safe = html.escape(segment)
-        
-        if matched_cats:
-            # Distribute length
-            split_len = sent_len / len(matched_cats)
-            for cat in matched_cats:
-                aspect_scores[cat].append(sent_score)
-                aspect_lengths[cat] += split_len
-                aspect_mentions[cat] += 1
-                
-            # Build highlight HTML
-            tags_html = "".join([f"<span style='font-size: 0.7em; font-weight: bold; color: #4b5563; background: #e5e7eb; padding: 2px 6px; margin-left: 4px; border-radius: 12px; white-space: nowrap;'>{c}</span>" for c in matched_cats])
-            
-            # Sentiment color for the block background
-            bg_color = "#f3f4f6" # neutral gray
-            border_color = "#e5e7eb"
-            if sent_score > 0.1:
-                bg_color = "#dcfce7" # subtle green
-                border_color = "#bbf7d0"
-            elif sent_score < -0.1:
-                bg_color = "#fee2e2" # subtle red
-                border_color = "#fecaca"
-                
-            highlight = f"<span style='background-color: {bg_color}; border: 1px solid {border_color}; padding: 2px 4px; border-radius: 6px; line-height: 2.2;'>{segment_safe}{tags_html}</span>"
-            highlighted_html.append(highlight)
-        else:
-            general_length += sent_len
-            highlighted_html.append(segment_safe)
-    
-    final_tags = []
-    distribution = []
-    total_len = sum(aspect_lengths.values()) + general_length
-    
-    for category, scores in aspect_scores.items():
-        if scores:
-            # Average the sentiment across all sentences mentioning this aspect
-            avg_score = sum(scores) / len(scores)
-            if avg_score > 0.05:
-                final_tags.append(f"🟢 {category}")
-            elif avg_score < -0.05:
-                final_tags.append(f"🔴 {category}")
-            else:
-                final_tags.append(f"⚪ {category}")
-                
-        if aspect_mentions[category] > 0:
-            distribution.append({"Topic": category, "Count": aspect_mentions[category]})
-            
-    mention_total = sum(aspect_mentions.values())
-    for row in distribution:
-        row["Share (%)"] = (row["Count"] / mention_total) if mention_total else 0
-    
-    # Sentiment breakdown distribution
-    sent_distribution = []
-    sentiment_total = sum(sentiment_counts.values())
-    for sent_type, s_count in sentiment_counts.items():
-        if sentiment_total > 0:
-            sent_distribution.append({"Sentiment": sent_type, "Count": s_count, "Percentage": s_count / sentiment_total})
-        
-    annotated_text = "".join(highlighted_html)
-    
-    # Extract final global sentiment (priority to LLM)
-    final_llm_score = analysis_meta.get("llm_global_score", 0.0)
-    
-    # --- SENTIMENT PROXYING (STABILIZATION) ---
-    # If LLM wasn't used/available, use VADER compound score as a high-quality proxy
-    # This prevents the 'Core Four' models from being blinded to sentiment.
-    if not analysis_meta.get("llm_used"):
-        final_llm_score = analyzer.polarity_scores(text)['compound']
-        analysis_meta["status"] = "Active: VADER Proxy (LLM-Off mode)"
-    
-    return (final_tags if final_tags else ["⚪ General Feedback"]), distribution, sent_distribution, annotated_text, analysis_meta, final_llm_score
     
 with tab_ml_predict:
     if not models:
@@ -3889,12 +3570,14 @@ with tab_ml_predict:
         with st.container():
             if "review_input_text" not in st.session_state:
                 st.session_state["review_input_text"] = ""
+            if "review_analyzed" not in st.session_state:
+                st.session_state["review_analyzed"] = False
 
             def _apply_sample_review(text: str):
                 st.session_state["review_input_text"] = text
                 st.session_state["review_analyzed"] = True
+                # No need for st.rerun here as it's an on_click callback
 
-            # Define callback for text changes to reset state
             def _reset_analysis_state():
                 st.session_state["review_analyzed"] = False
 
@@ -4127,34 +3810,27 @@ with tab_ml_predict:
             # The AI Toggle is now moved to the top row next to the Analyze button for better UX.
             pass
 
-            # Setup D: Hybrid Intelligence is now the standard for both toggles.
-            # When Smart AI is ON, it just provides a higher-quality 'llm_sentiment_score' feature.
-            # Use current_model_path from session state
+            # --- 1. MODEL LOADING ---
             model_dir = st.session_state.get("model_version_path", "models/optimized")
             model_bundle = load_ml_models(model_dir=model_dir)
             rating_models = model_bundle.get("rating", {})
             aspect_engine = model_bundle.get("aspect")
             dealbreakers = model_bundle.get("dealbreakers", {"neg": set(), "pos": set()})
+            benchmarks = model_bundle.get("benchmarks", {})
 
-            # 2. Model Selection Logic (Legacy Support for UI/UX)
             if rating_models:
                 engine_options = list(rating_models.keys())
-                # Default to the first available model (usually Logistic Regression)
                 selected_model_name = engine_options[0]
             else:
                 selected_model_name = "None"
 
-            # The Run Action is now moved to the top next to the text area for better UX.
-            # Keeping a small spacer here for code structural consistency
-            pass
-
             if st.session_state.get("review_analyzed") and review_input.strip() and rating_models:
                 # Add a hidden flag for the JS to know analysis is visible
                 st.markdown('<div id="analysis-done-flag" style="display:none;"></div>', unsafe_allow_html=True)
-                with st.spinner("Analyzing review logic..."):
+                
+                with st.spinner("🧠 AI is deep-diving into the review... This takes about 10-15 seconds."):
                     # 1. Topic & Sentiment Engine pass (The 'Routing Tags')
-                    # This now also returns the unified global sentiment score if use_llm=True
-                    detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta, llm_integrated_score = extract_aspect_tags(review_input, use_llm=use_llm)
+                    detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta, llm_integrated_score, agent_guidance = extract_aspect_tags(review_input, use_llm=use_llm)
                     
                     # --- AI SELF-HEALING FALLBACK ---
                     # If Smart AI was requested but failed (AI service down), 
@@ -4685,7 +4361,6 @@ with tab_ml_predict:
                 # --- 3. EVIDENCE LAYER (DEEP DIVE) ---
                 st.divider()
                 
-                # Move the Actionable Routing Tags to be under the divider
                 st.subheader(
                     "🎯 Actionable Routing Tags",
                     help="""Recommended follow-up routing based on our **7-point aviation taxonomy**:
@@ -4699,9 +4374,8 @@ with tab_ml_predict:
 7. **🎟️ Booking & Check-in:** Covers the pre-flight experience, including the website, SIA App, online check-in, and boarding counters."""
                 )
                 st.markdown(f"<div style='margin-top: 0.2rem;'>{tags_html}</div>", unsafe_allow_html=True)
-                
+
                 st.write("")
-                
                 with st.expander("🔍 Evidence Deep-Dive: Annotated Context", expanded=True):
                     # Added max-height and overflow-y: auto to handle 10,000+ word reviews without breaking UI
                     st.markdown(
@@ -4734,11 +4408,61 @@ with tab_ml_predict:
                         """,
                         unsafe_allow_html=True,
                     )
+                
+                # --- AI AGENT ASSISTANT (Relocated to Bottom & Collapsed) ---
+                with st.expander("🤖 AI Agent Assistant", expanded=False):
+                    st.markdown("<p style='font-size: 0.9rem; color: #64748b; margin-bottom: 1rem;'>AI-generated recommendations synthesized from the identified service drivers and review sentiment.</p>", unsafe_allow_html=True)
+                    
+                    if agent_guidance and (agent_guidance.get("suggested_response") or agent_guidance.get("strategic_steps")):
+                        # Proposed Response
+                        resp_text = agent_guidance.get("suggested_response", "No specific response generated.")
+                        st.markdown(
+                            f"""
+                            <div style='background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border: 1px solid #bae6fd; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;'>
+                                <div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem;'>
+                                    <span style='font-size: 1.2rem;'>📝</span>
+                                    <b style='color: #0369a1; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;'>Proposed Customer Reply</b>
+                                </div>
+                                <div style='color: #1e293b; font-size: 1.05rem; line-height: 1.6; font-style: italic; background: #ffffff; padding: 1rem; border-radius: 8px; border: 1px dashed #7dd3fc;'>
+                                    "{resp_text}"
+                                </div>
+                                <div style='margin-top: 0.8rem; font-size: 0.75rem; color: #64748b; display: flex; align-items: center; gap: 4px;'>
+                                    <span>✨</span> <b>Pro-tip:</b> This response is synthesized based on identified service drivers.
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                        
+                        # Strategic Next Steps
+                        steps = agent_guidance.get("strategic_steps", [])
+                        if steps:
+                            steps_html = "".join([f"<li style='margin-bottom: 6px;'>{s}</li>" for s in steps])
+                            st.markdown(
+                                f"""
+                                <div style='background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; border-left: 5px solid #10b981;'>
+                                    <div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem;'>
+                                        <span style='font-size: 1.2rem;'>🚀</span>
+                                        <b style='color: #0f172a; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;'>Internal Strategic Next Steps</b>
+                                    </div>
+                                    <ul style='color: #334155; font-size: 0.95rem; line-height: 1.5; padding-left: 1.2rem;'>
+                                        {steps_html}
+                                    </ul>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                    else:
+                        if use_llm:
+                            st.info("Additional strategic insights will appear here when identified.")
+                        else:
+                            st.warning("Enable **Smart AI Analysis** to unlock recommendations.")
             
             elif st.session_state.get("review_analyzed") and not review_input.strip():
                 st.warning("Please enter some text to begin analysis.")
             elif st.session_state.get("review_analyzed") and not rating_models:
                 st.error("ML Prediction Engine not found. Please check your 'models/' directory.")
+
 
 
 
