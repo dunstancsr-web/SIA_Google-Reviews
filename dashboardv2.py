@@ -1781,7 +1781,7 @@ def extract_aspect_tags(text, use_llm=True):
             
             OUTPUT SCHEMA:
             {{
-              "suggested_response": "2-sentence empathetic SIA reply",
+              "suggested_response": "Generate a 2-sentence empathetic SIA reply, then add 1-2 sentences on specific actions SIA is taking to resolve this",
               "strategic_steps": ["List of follow-up actions"],
               "overall_sentiment_score": float between -1.0 and 1.0,
               "segment_tagging_results": [
@@ -1837,6 +1837,13 @@ def extract_aspect_tags(text, use_llm=True):
                 
                 # Update Synthesis
                 s_resp = annotations_data.get("suggested_response") or annotations_data.get("Response") or ""
+                # Clean up list format if LLM returned one
+                if isinstance(s_resp, list):
+                    s_resp = " ".join([str(item) for item in s_resp])
+                
+                # Remove surrounding brackets/quotes and internal stray quotes
+                s_resp = str(s_resp).replace('"', '').replace('[', '').replace(']', '').strip()
+                
                 s_steps = annotations_data.get("strategic_steps") or annotations_data.get("next_steps") or []
                 agent_guidance = {
                     "suggested_response": s_resp,
@@ -4422,25 +4429,122 @@ with tab_ml_predict:
                         unsafe_allow_html=True,
                     )
                 
-                # --- AI AGENT ASSISTANT (Relocated to Bottom & Collapsed) ---
-                with st.expander("🤖 AI Agent Assistant", expanded=False):
+                # --- AI GENERATED RECOMMENDATIONS ---
+                with st.expander(" ✨ Recommended Response & Next Steps", expanded=False):
                     st.markdown("<p style='font-size: 0.9rem; color: #64748b; margin-bottom: 1rem;'>AI-generated recommendations synthesized from the identified service drivers and review sentiment.</p>", unsafe_allow_html=True)
                     
                     if agent_guidance and (agent_guidance.get("suggested_response") or agent_guidance.get("strategic_steps")):
                         # Proposed Response
                         resp_text = agent_guidance.get("suggested_response", "No specific response generated.")
-                        st.markdown(
-                            f"""
-                            <div style='background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border: 1px solid #bae6fd; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;'>
-                                <div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem;'>
+                        
+                        # Layout for Header and Copy Button
+                        col_reply_head, col_reply_copy = st.columns([3, 1])
+                        with col_reply_head:
+                            st.markdown(
+                                """
+                                <div style='display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;'>
                                     <span style='font-size: 1.2rem;'>📝</span>
                                     <b style='color: #0369a1; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;'>Proposed Customer Reply</b>
                                 </div>
-                                <div style='color: #1e293b; font-size: 1.05rem; line-height: 1.6; font-style: italic; background: #ffffff; padding: 1rem; border-radius: 8px; border: 1px dashed #7dd3fc;'>
-                                    "{resp_text}"
+                                """,
+                                unsafe_allow_html=True
+                            )
+                        with col_reply_copy:
+                            import json
+                            escaped_text = json.dumps(resp_text)
+                            st.components.v1.html(f"""
+                                <style>
+                                    body {{ margin: 0; padding: 0; overflow: hidden; }}
+                                    #copy-btn {{
+                                        width: 100%;
+                                        height: 38px;
+                                        padding: 6px 4px;
+                                        border-radius: 8px;
+                                        border: 1px solid #d1d5db;
+                                        background-color: #ffffff;
+                                        color: #374151;
+                                        cursor: pointer;
+                                        font-size: 0.8rem;
+                                        font-family: 'Source Sans Pro', sans-serif;
+                                        font-weight: 600;
+                                        display: flex;
+                                        justify-content: center;
+                                        align-items: center;
+                                        gap: 4px;
+                                        transition: all 0.2s ease;
+                                    }}
+                                    #copy-btn:hover {{ background-color: #f9fafb; border-color: #9ca3af; }}
+                                </style>
+                                <button id="copy-btn">
+                                    <span id="btn-icon">📋</span> <span id="btn-text">Copy Response</span>
+                                </button>
+                                <script>
+                                document.getElementById('copy-btn').onclick = function() {{
+                                    const text = {escaped_text};
+                                    const btn = this;
+                                    const btnText = document.getElementById('btn-text');
+                                    const btnIcon = document.getElementById('btn-icon');
+                                    
+                                    function fallbackCopy(val) {{
+                                        const textArea = document.createElement("textarea");
+                                        textArea.value = val;
+                                        textArea.style.position = "fixed";
+                                        textArea.style.left = "-9999px";
+                                        textArea.style.top = "0";
+                                        document.body.appendChild(textArea);
+                                        textArea.focus();
+                                        textArea.select();
+                                        try {{
+                                            document.execCommand('copy');
+                                            return true;
+                                        }} catch (err) {{
+                                            return false;
+                                        }} finally {{
+                                            document.body.removeChild(textArea);
+                                        }}
+                                    }}
+
+                                    async function doCopy() {{
+                                        let success = false;
+                                        try {{
+                                            if (navigator.clipboard) {{
+                                                await navigator.clipboard.writeText(text);
+                                                success = true;
+                                            }} else {{
+                                                success = fallbackCopy(text);
+                                            }}
+                                        }} catch (err) {{
+                                            success = fallbackCopy(text);
+                                        }}
+                                        
+                                        if (success) {{
+                                            btn.style.backgroundColor = "#f0fdf4";
+                                            btn.style.borderColor = "#86efac";
+                                            btn.style.color = "#166534";
+                                            btnText.innerText = "Copied!";
+                                            btnIcon.innerText = "✅";
+                                            setTimeout(() => {{
+                                                btn.style.backgroundColor = "#ffffff";
+                                                btn.style.borderColor = "#d1d5db";
+                                                btn.style.color = "#374151";
+                                                btnText.innerText = "Copy Response";
+                                                btnIcon.innerText = "📋";
+                                            }}, 2000);
+                                        }}
+                                    }}
+                                    doCopy();
+                                }};
+                                </script>
+                            """, height=50)
+
+                        st.markdown(
+                            f"""
+                            <div style='background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border: 1px solid #bae6fd; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;'>
+                                <div style='color: #1e293b; font-size: 1.05rem; line-height: 1.6; background: #ffffff; padding: 1rem; border-radius: 8px; border: 1px dashed #7dd3fc; margin-bottom: 0.8rem;'>
+                                    {resp_text}
                                 </div>
-                                <div style='margin-top: 0.8rem; font-size: 0.75rem; color: #64748b; display: flex; align-items: center; gap: 4px;'>
-                                    <span>✨</span> <b>Pro-tip:</b> This response is synthesized based on identified service drivers.
+                                <div style='font-size: 0.75rem; color: #64748b; display: flex; align-items: center; gap: 4px;'>
+                                    AI can make mistakes. Please double-check responses before sending it to customers.
                                 </div>
                             </div>
                             """,

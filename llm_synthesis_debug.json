@@ -1,20 +1,42 @@
 {
-"suggested_response": "I'm sorry to hear that your recent experience with Singapore Airlines was not up to par.",
-"strategic_steps": [
-  "Follow-up with customer service team",
-  "Offer a complimentary upgrade on next flight"
-],
-"overall_sentiment_score": -0.9,
-"segment_tagging_results": [
-  {
-    "id": 0,
-    "topics": ["Service"],
-    "sentiment": "Negative"
-  },
-  {
-    "id": 1,
-    "topics": ["Seat & Comfort"],
-    "sentiment": "Negative"
-  }
-]
+  "suggested_response": "",
+  "strategic_steps": [],
+  "overall_sentiment_score": -1.0,
+  "segment_tagging_results": [
+    {
+      "id": 0,
+      "topics": ["Food & Beverage"],
+      "sentiment": "Negative"
+    },
+    {
+      "id": 0,
+      "topics": ["Seat & Comfort"],
+      "sentiment": "Neutral"
+    },
+    {
+      "id": 0,
+      "topics": ["Staff & Service"],
+      "sentiment": "Positive"
+    },
+    {
+      "id": 0,
+      "topics": ["Flight Punctuality"],
+      "sentiment": "Negative"
+    },
+    {
+      "id": 0,
+      "topics": ["Baggage Handling"],
+      "sentiment": "Neutral"
+    },
+    {
+      "id": 0,
+      "topics": ["Inflight Entertainment"],
+      "sentiment": "Negative"
+    },
+    {
+      "id": 0,
+      "topics": ["Booking & Check-in"],
+      "sentiment": "Neutral"
+    }
+  ]
 }
