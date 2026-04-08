@@ -3628,6 +3628,18 @@ with tab_ml_predict:
                 on_change=_reset_analysis_state,
             )
 
+            # --- AI TOGGLE SYNC LOGIC ---
+            if "_smart_ai_toggle" not in st.session_state:
+                st.session_state["_smart_ai_toggle"] = False
+            if "_smart_ai_toggle_assistant" not in st.session_state:
+                st.session_state["_smart_ai_toggle_assistant"] = st.session_state["_smart_ai_toggle"]
+
+            def sync_main_toggle():
+                st.session_state["_smart_ai_toggle_assistant"] = st.session_state["_smart_ai_toggle"]
+
+            def sync_assistant_toggle():
+                st.session_state["_smart_ai_toggle"] = st.session_state["_smart_ai_toggle_assistant"]
+
             # 1. Primary Modifier - The AI Toggle logic moved up for row integration
             selected_ai_backend = st.session_state.get("selected_ai_model", "auto")
             groq_api_ready = bool(os.environ.get("GROQ_API_KEY", ""))
@@ -3655,9 +3667,10 @@ with tab_ml_predict:
             with col_toggle:
                 use_llm = st.toggle(
                     "Use Smart AI Analysis",
-                    value=False,
+                    value=st.session_state["_smart_ai_toggle"],
                     key="_smart_ai_toggle",
                     help=help_text,
+                    on_change=sync_main_toggle
                 )
 
             with col_spacer:
@@ -4456,7 +4469,19 @@ with tab_ml_predict:
                         if use_llm:
                             st.info("Additional strategic insights will appear here when identified.")
                         else:
-                            st.warning("Enable **Smart AI Analysis** to unlock recommendations.")
+                            # Synced secondary toggle for better UX
+                            col_msg_t, col_msg_txt = st.columns([0.25, 1])
+                            with col_msg_t:
+                                st.toggle(
+                                    "Use Smart AI Analysis",
+                                    value=st.session_state["_smart_ai_toggle_assistant"],
+                                    key="_smart_ai_toggle_assistant",
+                                    help=help_text,
+                                    on_change=sync_assistant_toggle,
+                                    label_visibility="collapsed"
+                                )
+                            with col_msg_txt:
+                                st.warning("Enable **Smart AI Analysis** to unlock recommendations.")
             
             elif st.session_state.get("review_analyzed") and not review_input.strip():
                 st.warning("Please enter some text to begin analysis.")
