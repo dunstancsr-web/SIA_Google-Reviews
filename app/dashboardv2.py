@@ -1700,7 +1700,8 @@ ASPECT_TAXONOMY = {
 current_model_path = st.session_state.get("model_version_path", "models/optimized")
 GLOBAL_MODELS = load_ml_models(model_dir=current_model_path)
 
-def extract_aspect_tags(text, use_llm=True):
+@st.cache_data(show_spinner=False)
+def extract_aspect_tags(text, use_llm=True, model_choice="auto"):
     analyzer = get_vader_analyzer()
     segments = re.split(r'([.!?\n]+)', text)
     analysis_meta = {
@@ -1718,7 +1719,7 @@ def extract_aspect_tags(text, use_llm=True):
     }
     
     llm_sentiments = {}
-    model_choice = st.session_state.get("selected_ai_model", "auto")
+    # model_choice is now passed as an argument to support caching
     api_key = os.environ.get("GROQ_API_KEY", "")
     use_groq = (model_choice == "groq" and api_key) or (model_choice == "auto" and api_key)
     use_ollama = (model_choice == "ollama") or (model_choice == "auto" and not api_key)
@@ -1857,7 +1858,10 @@ def extract_aspect_tags(text, use_llm=True):
                 analysis_meta["llm_global_score"] = llm_global_score
                 analysis_meta["status"] = f"Active: {analysis_meta['engine_label']}"
             except Exception as e:
-                st.toast(f"LLM Structure Issue: {str(e)[:40]}", icon="⚠️")
+                # We record the error in analysis_meta rather than using st.toast 
+                # (cached functions cannot call st. commands)
+                analysis_meta["status"] = f"Error: {str(e)[:40]}"
+                analysis_meta["llm_error"] = str(e)
     
     aspect_scores = {category: [] for category in ASPECT_TAXONOMY}
     aspect_lengths = {category: 0.0 for category in ASPECT_TAXONOMY}
@@ -3330,7 +3334,7 @@ with tab_explore:
                         exec_error = str(e)
                     
                     # 3. Fast Routing Tags (Always use local logic for batch to save time/cost)
-                    detected_tags, _, _, _, _, _ = extract_aspect_tags(rv_text, use_llm=False)
+                    detected_tags, _, _, _, _, _, _ = extract_aspect_tags(rv_text, use_llm=False)
                     
                     results.append({
                         "Review Content": rv_text,
@@ -3843,7 +3847,12 @@ with tab_ml_predict:
                 
                 with st.spinner("🧠 AI is deep-diving into the review... This takes about 10-15 seconds."):
                     # 1. Topic & Sentiment Engine pass (The 'Routing Tags')
-                    detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta, llm_integrated_score, agent_guidance = extract_aspect_tags(review_input, use_llm=use_llm)
+                    model_choice = st.session_state.get("selected_ai_model", "auto")
+                    detected_tags, aspect_dist, sent_dist, annotated_text, analysis_meta, llm_integrated_score, agent_guidance = extract_aspect_tags(review_input, use_llm=use_llm, model_choice=model_choice)
+                    
+                    # Handle any errors reported by the cached function
+                    if "llm_error" in analysis_meta:
+                        st.toast(f"LLM Structure Issue: {analysis_meta['llm_error'][:40]}", icon="⚠️")
                     
                     # --- AI SELF-HEALING FALLBACK ---
                     # If Smart AI was requested but failed (AI service down), 
