@@ -1,1 +1,22 @@
-{"suggested_response": "Sorry to hear that your recent return flights on Singapore Airlines were not up to your expectations. We are sorry for the issues you experienced with seat reservations, flight delays, and poor customer service. Operational/technical reasons do not justify these issues, and we will be reaching out to our In-flight Operations team to investigate this matter thoroughly and improve our services. We apologize again for the inconvenience caused.", "strategic_steps": ["Notify Customer Service Team", "Investigate Seat Reservation Issues", "Improve Flight Delay Communication"], "overall_sentiment_score": 0.333, "segment_tagging_results": [{"id": 0, "topics": ["Staff & Service", "Seat & Comfort", "Flight Punctuality"], "sentiment": "Negative"}]}
+{
+"suggested_response": "Thank you for your wonderful review! We're thrilled that our economy class seats exceeded your expectations. Your kind words will be shared with our cabin crew leadership team. We're also glad to hear that our breakfast service and inflight entertainment options met your needs. We'd love to have you fly with us again soon!",
+"strategic_steps": ["Notify Cabin Crew Leadership team about excellent staff service", "Share positive review with In-flight Catering team", "Forward feedback on seat comfort and breakfast quality"],
+"overall_sentiment_score": 0.9,
+"segment_tagging_results": [
+{
+"id": 0,
+"topics": ["Seat & Comfort"],
+"sentiment": "Positive"
+},
+{
+"id": 1,
+"topics": ["Food & Beverage"],
+"sentiment": "Positive"
+},
+{
+"id": 2,
+"topics": ["Staff & Service"],
+"sentiment": "Positive"
+}
+]
+}

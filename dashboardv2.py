@@ -16,13 +16,7 @@ import textwrap
 import requests
 from datetime import datetime
 import time
-
-os.makedirs('./nltk_data', exist_ok=True)
-nltk.data.path.append('./nltk_data')
-try:
-    nltk.download('vader_lexicon', download_dir='./nltk_data', quiet=True)
-except Exception:
-    pass
+from utils import clean_text as clean_text_local, has_dealbreaker as has_db, get_llm_sentiment
 
 @st.cache_resource
 def load_ml_models(model_dir: str = "models"):
@@ -115,18 +109,7 @@ def load_ml_models(model_dir: str = "models"):
 @st.cache_data(show_spinner=False)
 def get_ollama_sentiment(text):
     """Real-time ping to the local Ollama instance."""
-    try:
-        prompt = f"Analyze sentiment of this review. Output ONLY a decimal from -1.0 to 1.0. No text. Review: \"{text[:500]}\""
-        payload = {"model": "llama3:latest", "prompt": prompt, "stream": False, "options": {"temperature": 0}}
-        resp = requests.post("http://localhost:11434/api/generate", json=payload, timeout=10)
-        if resp.status_code == 200:
-            raw = resp.json().get("response", "0.0")
-            match = re.search(r"[-+]?\d*\.\d+|\d+", raw)
-            return float(match.group()) if match else 0.0
-    except:
-        return None
-    return None
-
+    return get_llm_sentiment(text)
 def render_star_rating(score, color="#ca8a04"):
     """
     Renders 5 stars with partial fill based on the fractional score using inline SVGs.
@@ -727,18 +710,10 @@ def load_data(path: str) -> pd.DataFrame:
             neg_db = set()
             
         # 2. Clean Text Logic
-        def clean_text_local(text):
-            if not isinstance(text, str): return ""
-            return re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
-        
         if "clean_text" not in df.columns:
             df["clean_text"] = df["text"].fillna("").apply(clean_text_local)
             
         # 3. Apply Scout Logic
-        def has_db(text, word_set):
-            words = set(str(text).split())
-            return 1 if words & word_set else 0
-            
         df["has_negative_dealbreaker"] = df["clean_text"].apply(lambda t: has_db(t, neg_db))
         
         # 4. Save back to master CSV for persistene

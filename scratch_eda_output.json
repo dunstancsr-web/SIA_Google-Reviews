@@ -1,0 +1,397 @@
+{
+  "Total Reviews": 10000,
+  "Date Range": "2018-08-06 to 2024-03-12",
+  "Time Series (Monthly)": [
+    {
+      "published_date": "2018-08",
+      "review_count": 315,
+      "avg_rating": 4.2063492063492065
+    },
+    {
+      "published_date": "2018-09",
+      "review_count": 802,
+      "avg_rating": 4.326683291770574
+    },
+    {
+      "published_date": "2018-10",
+      "review_count": 428,
+      "avg_rating": 4.252336448598131
+    },
+    {
+      "published_date": "2018-11",
+      "review_count": 379,
+      "avg_rating": 4.224274406332454
+    },
+    {
+      "published_date": "2018-12",
+      "review_count": 694,
+      "avg_rating": 4.456772334293948
+    },
+    {
+      "published_date": "2019-01",
+      "review_count": 390,
+      "avg_rating": 4.138461538461539
+    },
+    {
+      "published_date": "2019-02",
+      "review_count": 483,
+      "avg_rating": 4.393374741200828
+    },
+    {
+      "published_date": "2019-03",
+      "review_count": 378,
+      "avg_rating": 4.2407407407407405
+    },
+    {
+      "published_date": "2019-04",
+      "review_count": 452,
+      "avg_rating": 4.157079646017699
+    },
+    {
+      "published_date": "2019-05",
+      "review_count": 395,
+      "avg_rating": 4.222784810126583
+    },
+    {
+      "published_date": "2019-06",
+      "review_count": 367,
+      "avg_rating": 4.20708446866485
+    },
+    {
+      "published_date": "2019-07",
+      "review_count": 688,
+      "avg_rating": 4.300872093023256
+    },
+    {
+      "published_date": "2019-08",
+      "review_count": 308,
+      "avg_rating": 4.194805194805195
+    },
+    {
+      "published_date": "2019-09",
+      "review_count": 536,
+      "avg_rating": 4.2611940298507465
+    },
+    {
+      "published_date": "2019-10",
+      "review_count": 319,
+      "avg_rating": 4.184952978056426
+    },
+    {
+      "published_date": "2019-11",
+      "review_count": 305,
+      "avg_rating": 4.19672131147541
+    },
+    {
+      "published_date": "2019-12",
+      "review_count": 582,
+      "avg_rating": 4.316151202749141
+    },
+    {
+      "published_date": "2020-01",
+      "review_count": 239,
+      "avg_rating": 4.02510460251046
+    },
+    {
+      "published_date": "2020-02",
+      "review_count": 216,
+      "avg_rating": 4.166666666666667
+    },
+    {
+      "published_date": "2020-03",
+      "review_count": 343,
+      "avg_rating": 4.2128279883381925
+    },
+    {
+      "published_date": "2020-04",
+      "review_count": 23,
+      "avg_rating": 3.4347826086956523
+    },
+    {
+      "published_date": "2020-05",
+      "review_count": 13,
+      "avg_rating": 3.5384615384615383
+    },
+    {
+      "published_date": "2020-06",
+      "review_count": 17,
+      "avg_rating": 3.0588235294117645
+    },
+    {
+      "published_date": "2020-07",
+      "review_count": 14,
+      "avg_rating": 3.857142857142857
+    },
+    {
+      "published_date": "2020-08",
+      "review_count": 9,
+      "avg_rating": 3.4444444444444446
+    },
+    {
+      "published_date": "2020-09",
+      "review_count": 12,
+      "avg_rating": 3.4166666666666665
+    },
+    {
+      "published_date": "2020-10",
+      "review_count": 10,
+      "avg_rating": 3.2
+    },
+    {
+      "published_date": "2020-11",
+      "review_count": 8,
+      "avg_rating": 3.625
+    },
+    {
+      "published_date": "2020-12",
+      "review_count": 7,
+      "avg_rating": 2.142857142857143
+    },
+    {
+      "published_date": "2021-01",
+      "review_count": 2,
+      "avg_rating": 5.0
+    },
+    {
+      "published_date": "2021-02",
+      "review_count": 6,
+      "avg_rating": 3.6666666666666665
+    },
+    {
+      "published_date": "2021-03",
+      "review_count": 7,
+      "avg_rating": 3.2857142857142856
+    },
+    {
+      "published_date": "2021-04",
+      "review_count": 4,
+      "avg_rating": 1.0
+    },
+    {
+      "published_date": "2021-05",
+      "review_count": 2,
+      "avg_rating": 3.0
+    },
+    {
+      "published_date": "2021-06",
+      "review_count": 3,
+      "avg_rating": 2.3333333333333335
+    },
+    {
+      "published_date": "2021-07",
+      "review_count": 5,
+      "avg_rating": 3.6
+    },
+    {
+      "published_date": "2021-08",
+      "review_count": 6,
+      "avg_rating": 3.6666666666666665
+    },
+    {
+      "published_date": "2021-09",
+      "review_count": 3,
+      "avg_rating": 2.3333333333333335
+    },
+    {
+      "published_date": "2021-10",
+      "review_count": 9,
+      "avg_rating": 2.111111111111111
+    },
+    {
+      "published_date": "2021-11",
+      "review_count": 15,
+      "avg_rating": 1.5333333333333334
+    },
+    {
+      "published_date": "2021-12",
+      "review_count": 23,
+      "avg_rating": 2.0
+    },
+    {
+      "published_date": "2022-01",
+      "review_count": 33,
+      "avg_rating": 2.121212121212121
+    },
+    {
+      "published_date": "2022-02",
+      "review_count": 19,
+      "avg_rating": 2.263157894736842
+    },
+    {
+      "published_date": "2022-03",
+      "review_count": 32,
+      "avg_rating": 1.90625
+    },
+    {
+      "published_date": "2022-04",
+      "review_count": 41,
+      "avg_rating": 1.9268292682926829
+    },
+    {
+      "published_date": "2022-05",
+      "review_count": 57,
+      "avg_rating": 1.894736842105263
+    },
+    {
+      "published_date": "2022-06",
+      "review_count": 38,
+      "avg_rating": 2.026315789473684
+    },
+    {
+      "published_date": "2022-07",
+      "review_count": 71,
+      "avg_rating": 1.9014084507042253
+    },
+    {
+      "published_date": "2022-08",
+      "review_count": 54,
+      "avg_rating": 2.074074074074074
+    },
+    {
+      "published_date": "2022-09",
+      "review_count": 54,
+      "avg_rating": 2.685185185185185
+    },
+    {
+      "published_date": "2022-10",
+      "review_count": 53,
+      "avg_rating": 2.5283018867924527
+    },
+    {
+      "published_date": "2022-11",
+      "review_count": 62,
+      "avg_rating": 2.564516129032258
+    },
+    {
+      "published_date": "2022-12",
+      "review_count": 38,
+      "avg_rating": 2.1315789473684212
+    },
+    {
+      "published_date": "2023-01",
+      "review_count": 54,
+      "avg_rating": 2.6666666666666665
+    },
+    {
+      "published_date": "2023-02",
+      "review_count": 52,
+      "avg_rating": 2.8846153846153846
+    },
+    {
+      "published_date": "2023-03",
+      "review_count": 64,
+      "avg_rating": 2.75
+    },
+    {
+      "published_date": "2023-04",
+      "review_count": 52,
+      "avg_rating": 2.4615384615384617
+    },
+    {
+      "published_date": "2023-05",
+      "review_count": 47,
+      "avg_rating": 2.5319148936170213
+    },
+    {
+      "published_date": "2023-06",
+      "review_count": 49,
+      "avg_rating": 2.5306122448979593
+    },
+    {
+      "published_date": "2023-07",
+      "review_count": 35,
+      "avg_rating": 2.4571428571428573
+    },
+    {
+      "published_date": "2023-08",
+      "review_count": 38,
+      "avg_rating": 2.5526315789473686
+    },
+    {
+      "published_date": "2023-09",
+      "review_count": 41,
+      "avg_rating": 3.1951219512195124
+    },
+    {
+      "published_date": "2023-10",
+      "review_count": 52,
+      "avg_rating": 2.6923076923076925
+    },
+    {
+      "published_date": "2023-11",
+      "review_count": 29,
+      "avg_rating": 2.310344827586207
+    },
+    {
+      "published_date": "2023-12",
+      "review_count": 22,
+      "avg_rating": 3.3636363636363638
+    },
+    {
+      "published_date": "2024-01",
+      "review_count": 43,
+      "avg_rating": 2.302325581395349
+    },
+    {
+      "published_date": "2024-02",
+      "review_count": 31,
+      "avg_rating": 2.5806451612903225
+    },
+    {
+      "published_date": "2024-03",
+      "review_count": 22,
+      "avg_rating": 2.0454545454545454
+    }
+  ],
+  "Rating Distribution": [
+    {
+      "rating": 1,
+      "count": 1057,
+      "avg_length": 920.4683065279091,
+      "median_length": 674.0
+    },
+    {
+      "rating": 2,
+      "count": 543,
+      "avg_length": 871.4235727440147,
+      "median_length": 645.0
+    },
+    {
+      "rating": 3,
+      "count": 1009,
+      "avg_length": 737.8671952428147,
+      "median_length": 581.0
+    },
+    {
+      "rating": 4,
+      "count": 1967,
+      "avg_length": 526.6619217081851,
+      "median_length": 370.0
+    },
+    {
+      "rating": 5,
+      "count": 5424,
+      "avg_length": 431.16832595870204,
+      "median_length": 305.0
+    }
+  ],
+  "Sentiment Share": {
+    "Positive": 7361,
+    "Neutral": 0,
+    "Negative": 2639
+  },
+  "Platform Stats": [
+    {
+      "published_platform": "Desktop",
+      "review_count": 7352,
+      "avg_rating": 3.9640914036996735,
+      "avg_length": 576.3635745375408
+    },
+    {
+      "published_platform": "Mobile",
+      "review_count": 2648,
+      "avg_rating": 4.159365558912387,
+      "avg_length": 501.4358006042296
+    }
+  ]
+}

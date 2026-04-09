@@ -24,23 +24,7 @@ nltk.data.path.append('./nltk_data')
 nltk.download('vader_lexicon', download_dir='./nltk_data', quiet=True)
 nltk.download('stopwords', download_dir='./nltk_data', quiet=True)
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-def clean_text(text):
-    if not isinstance(text, str):
-        return ""
-    text = text.lower()
-    text = re.sub(r'[^a-z0-9\s]', '', text)
-    return text.strip()
-
-def get_vader_min(text, analyzer):
-    sentences = re.split(r'[.!?]', str(text))
-    scores = [analyzer.polarity_scores(s)['compound'] for s in sentences if s.strip()]
-    return min(scores) if scores else 0.0
-
-def has_dealbreaker(text, word_set):
-    words = set(text.split())
-    return 1 if words & word_set else 0
+from utils import clean_text, get_vader_min, has_dealbreaker
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 

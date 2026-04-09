@@ -17,44 +17,9 @@ SAVE_INTERVAL = 10  # Reduced for the 100-review test batch
 TEST_LIMIT = 100    # Added to handle the user's specific request
 
 # --- NLP INITIALIZATION ---
-os.makedirs('./nltk_data', exist_ok=True)
-nltk.data.path.append('./nltk_data')
-nltk.download('vader_lexicon', download_dir='./nltk_data', quiet=True)
-analyzer = SentimentIntensityAnalyzer()
+from utils import clean_text as clean_text_local, get_vader_min, has_dealbreaker as has_db, get_llm_sentiment
 
-# --- HELPERS ---
-def clean_text_local(text):
-    if not isinstance(text, str): return ""
-    return re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
-
-def get_vader_min(text):
-    """Isolates the single angriest sentence (The Pain Point)."""
-    sentences = re.split(r'[.!?]', str(text))
-    scores = [analyzer.polarity_scores(s)['compound'] for s in sentences if s.strip()]
-    return min(scores) if scores else 0.0
-
-def has_db(text, word_set):
-    words = set(text.split())
-    return 1 if words & word_set else 0
-
-def get_llm_sentiment(text):
-    """Pings the local Ollama API for a high-nuance sentiment score."""
-    if not isinstance(text, str) or not text.strip():
-        return 0.0
-    
-    prompt = f'Analyze sentiment of this review. Output ONLY a decimal from -1.0 to 1.0. No text. Review: "{text[:800]}"'
-    payload = {"model": MODEL_NAME, "prompt": prompt, "stream": False, "options": {"temperature": 0}}
-    
-    try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=15)
-        response.raise_for_status()
-        raw_text = response.json().get("response", "0.0").strip()
-        matches = re.findall(r"[-+]?\d*\.\d+|\d+", raw_text)
-        if matches:
-            return max(-1.0, min(1.0, float(matches[0])))
-        return 0.0
-    except Exception:
-        return 0.0
+# --- ENGINE HELPER IMPORTS COMPLETED ---
 
 # --- MAIN ENGINE ---
 def main():
