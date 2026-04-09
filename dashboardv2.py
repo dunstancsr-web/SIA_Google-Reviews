@@ -1772,25 +1772,33 @@ def extract_aspect_tags(text, use_llm=True):
             full_text = " ".join([s["text"] for s in valid_sentences])
             categories_str = ", ".join(compact_taxonomy)
             
-            prompt = f"""
-            Analyze this Singapore Airlines review and return a valid JSON object.
-            
-            REVIEW: "{full_text}"
-            
-            TAXONOMY: {categories_str}
-            
-            OUTPUT SCHEMA:
-            {{
-              "suggested_response": "Generate a 2-sentence empathetic SIA reply, then add 1-2 sentences on specific actions SIA is taking to resolve this",
-              "strategic_steps": ["List of follow-up actions"],
-              "overall_sentiment_score": float between -1.0 and 1.0,
-              "segment_tagging_results": [
-                 {{"id": 0, "topics": ["Category"], "sentiment": "Positive/Negative/Neutral"}}
-              ]
-            }}
-            
-            Return ONLY raw JSON. No preamble.
-            """
+            prompt_obj = {
+                "task": "Analyze this Singapore Airlines customer review and return a structured JSON response.",
+                "review": full_text,
+                "taxonomy": compact_taxonomy,
+                "response_guidelines": {
+                    "negative_or_mixed": {
+                        "rule_1": "Start with genuine empathy acknowledging the specific issue the customer faced.",
+                        "rule_2": "Name the specific internal team being notified to investigate (e.g. Our In-flight Catering team, Our Ground Operations team, Our Cabin Crew leadership) based on the topics detected.",
+                        "rule_3": "End with: We will be reaching out to you via private message to gather more details so that we can investigate this matter thoroughly and improve our services."
+                    },
+                    "positive": {
+                        "rule_1": "Express sincere gratitude and warmth.",
+                        "rule_2": "Mention that the compliment will be shared with the relevant crew or department.",
+                        "rule_3": "Invite them to fly with SIA again."
+                    }
+                },
+                "output_schema": {
+                    "suggested_response": "A 3-4 sentence SIA reply following the response_guidelines above",
+                    "strategic_steps": ["List of specific internal follow-up actions for the CS team"],
+                    "overall_sentiment_score": "float between -1.0 and 1.0",
+                    "segment_tagging_results": [
+                        {"id": 0, "topics": ["Category from taxonomy"], "sentiment": "Positive/Negative/Neutral"}
+                    ]
+                }
+            }
+            prompt = json.dumps(prompt_obj, ensure_ascii=False)
+            system_msg = "You are a JSON-only API. Return ONLY a single raw JSON object matching the output_schema. No markdown, no explanation, no preamble."
             
             try:
                 llm_out = ""
@@ -1798,13 +1806,13 @@ def extract_aspect_tags(text, use_llm=True):
                     from groq import Groq
                     client = Groq(api_key=api_key)
                     resp = client.chat.completions.create(
-                        messages=[{"role": "system", "content": "Return ONLY raw JSON."}, {"role": "user", "content": prompt}],
+                        messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}],
                         model="llama-3.1-8b-instant", temperature=0
                     )
                     llm_out = resp.choices[0].message.content or ""
                 else:
                     import requests
-                    res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": "Return ONLY raw JSON.", "stream": False}, timeout=60)
+                    res = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "system": system_msg, "stream": False}, timeout=60)
                     llm_out = res.json().get("response", "") or ""
 
                 # DIAGNOSTIC LOGGING: Save the raw LLM output for developer inspection
@@ -1844,10 +1852,20 @@ def extract_aspect_tags(text, use_llm=True):
                 # Remove surrounding brackets/quotes and internal stray quotes
                 s_resp = str(s_resp).replace('"', '').replace('[', '').replace(']', '').strip()
                 
-                s_steps = annotations_data.get("strategic_steps") or annotations_data.get("next_steps") or []
+                s_steps_raw = annotations_data.get("strategic_steps") or annotations_data.get("next_steps") or []
+                if not isinstance(s_steps_raw, list):
+                    s_steps_raw = [s_steps_raw]
+                # Normalize: LLM sometimes returns [{"step": "..."}, ...] instead of ["..."]
+                s_steps = []
+                for item in s_steps_raw:
+                    if isinstance(item, dict):
+                        # Extract the first value from the dict (e.g. {"step": "Notify..."} -> "Notify...")
+                        s_steps.append(str(next(iter(item.values()), item)))
+                    else:
+                        s_steps.append(str(item))
                 agent_guidance = {
                     "suggested_response": s_resp,
-                    "strategic_steps": s_steps if isinstance(s_steps, list) else [str(s_steps)]
+                    "strategic_steps": s_steps
                 }
                 
                 # Update Mood & Global Score
@@ -3642,10 +3660,10 @@ with tab_ml_predict:
                 st.session_state["_smart_ai_toggle_assistant"] = st.session_state["_smart_ai_toggle"]
 
             def sync_main_toggle():
-                st.session_state["_smart_ai_toggle_assistant"] = st.session_state["_smart_ai_toggle"]
+                st.session_state["_smart_ai_toggle_assistant"] = st.session_state.get("_smart_ai_toggle", False)
 
             def sync_assistant_toggle():
-                st.session_state["_smart_ai_toggle"] = st.session_state["_smart_ai_toggle_assistant"]
+                st.session_state["_smart_ai_toggle"] = st.session_state.get("_smart_ai_toggle_assistant", False)
 
             # 1. Primary Modifier - The AI Toggle logic moved up for row integration
             selected_ai_backend = st.session_state.get("selected_ai_model", "auto")
@@ -4430,126 +4448,35 @@ with tab_ml_predict:
                     )
                 
                 # --- AI GENERATED RECOMMENDATIONS ---
-                with st.expander(" ✨ Recommended Response & Next Steps", expanded=False):
-                    st.markdown("<p style='font-size: 0.9rem; color: #64748b; margin-bottom: 1rem;'>AI-generated recommendations synthesized from the identified service drivers and review sentiment.</p>", unsafe_allow_html=True)
+                with st.expander(" ✨ Suggested Response & Next Steps", expanded=False):
+                    st.caption("AI-generated recommendations synthesized from the identified service drivers and review sentiment.")
                     
                     if agent_guidance and (agent_guidance.get("suggested_response") or agent_guidance.get("strategic_steps")):
                         # Proposed Response
                         resp_text = agent_guidance.get("suggested_response", "No specific response generated.")
                         
-                        # Layout for Header and Copy Button
-                        col_reply_head, col_reply_copy = st.columns([3, 1])
-                        with col_reply_head:
-                            st.markdown(
-                                """
-                                <div style='display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;'>
-                                    <span style='font-size: 1.2rem;'>📝</span>
-                                    <b style='color: #0369a1; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;'>Proposed Customer Reply</b>
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
-                        with col_reply_copy:
-                            import json
-                            escaped_text = json.dumps(resp_text)
-                            st.components.v1.html(f"""
-                                <style>
-                                    body {{ margin: 0; padding: 0; overflow: hidden; }}
-                                    #copy-btn {{
-                                        width: 100%;
-                                        height: 38px;
-                                        padding: 6px 4px;
-                                        border-radius: 8px;
-                                        border: 1px solid #d1d5db;
-                                        background-color: #ffffff;
-                                        color: #374151;
-                                        cursor: pointer;
-                                        font-size: 0.8rem;
-                                        font-family: 'Source Sans Pro', sans-serif;
-                                        font-weight: 600;
-                                        display: flex;
-                                        justify-content: center;
-                                        align-items: center;
-                                        gap: 4px;
-                                        transition: all 0.2s ease;
-                                    }}
-                                    #copy-btn:hover {{ background-color: #f9fafb; border-color: #9ca3af; }}
-                                </style>
-                                <button id="copy-btn">
-                                    <span id="btn-icon">📋</span> <span id="btn-text">Copy Response</span>
-                                </button>
-                                <script>
-                                document.getElementById('copy-btn').onclick = function() {{
-                                    const text = {escaped_text};
-                                    const btn = this;
-                                    const btnText = document.getElementById('btn-text');
-                                    const btnIcon = document.getElementById('btn-icon');
-                                    
-                                    function fallbackCopy(val) {{
-                                        const textArea = document.createElement("textarea");
-                                        textArea.value = val;
-                                        textArea.style.position = "fixed";
-                                        textArea.style.left = "-9999px";
-                                        textArea.style.top = "0";
-                                        document.body.appendChild(textArea);
-                                        textArea.focus();
-                                        textArea.select();
-                                        try {{
-                                            document.execCommand('copy');
-                                            return true;
-                                        }} catch (err) {{
-                                            return false;
-                                        }} finally {{
-                                            document.body.removeChild(textArea);
-                                        }}
-                                    }}
-
-                                    async function doCopy() {{
-                                        let success = false;
-                                        try {{
-                                            if (navigator.clipboard) {{
-                                                await navigator.clipboard.writeText(text);
-                                                success = true;
-                                            }} else {{
-                                                success = fallbackCopy(text);
-                                            }}
-                                        }} catch (err) {{
-                                            success = fallbackCopy(text);
-                                        }}
-                                        
-                                        if (success) {{
-                                            btn.style.backgroundColor = "#f0fdf4";
-                                            btn.style.borderColor = "#86efac";
-                                            btn.style.color = "#166534";
-                                            btnText.innerText = "Copied!";
-                                            btnIcon.innerText = "✅";
-                                            setTimeout(() => {{
-                                                btn.style.backgroundColor = "#ffffff";
-                                                btn.style.borderColor = "#d1d5db";
-                                                btn.style.color = "#374151";
-                                                btnText.innerText = "Copy Response";
-                                                btnIcon.innerText = "📋";
-                                            }}, 2000);
-                                        }}
-                                    }}
-                                    doCopy();
-                                }};
-                                </script>
-                            """, height=50)
-
+                        # Proposed Response Header
                         st.markdown(
-                            f"""
-                            <div style='background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border: 1px solid #bae6fd; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;'>
-                                <div style='color: #1e293b; font-size: 1.05rem; line-height: 1.6; background: #ffffff; padding: 1rem; border-radius: 8px; border: 1px dashed #7dd3fc; margin-bottom: 0.8rem;'>
-                                    {resp_text}
-                                </div>
-                                <div style='font-size: 0.75rem; color: #64748b; display: flex; align-items: center; gap: 4px;'>
-                                    AI can make mistakes. Please double-check responses before sending it to customers.
-                                </div>
+                            """
+                            <style>
+                                /* Override monospace font in the Proposed Reply code block */
+                                div[data-testid="stCode"] code,
+                                div[data-testid="stCode"] pre,
+                                div[data-testid="stCode"] span {
+                                    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+                                    font-size: 0.95rem !important;
+                                    line-height: 1.6 !important;
+                                }
+                            </style>
+                            <div style='display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;'>
+                                <span style='font-size: 1.2rem;'>📝</span>
+                                <b style='color: #0369a1; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;'>Suggested Customer Reply</b>
                             </div>
                             """,
                             unsafe_allow_html=True
                         )
+                        st.code(resp_text, language=None, wrap_lines=True)
+                        st.caption("AI can make mistakes. Please double-check responses before sending to customers.")
                         
                         # Strategic Next Steps
                         steps = agent_guidance.get("strategic_steps", [])
@@ -4559,12 +4486,12 @@ with tab_ml_predict:
                                 f"""
                                 <div style='background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; border-left: 5px solid #10b981;'>
                                     <div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem;'>
-                                        <span style='font-size: 1.2rem;'>🚀</span>
-                                        <b style='color: #0f172a; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;'>Internal Strategic Next Steps</b>
+                                        <span style='font-size: 1.2rem;'>➜</span>
+                                        <b style='color: #0f172a; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;'>Suggested Next Steps (Internal)</b>
                                     </div>
-                                    <ul style='color: #334155; font-size: 0.95rem; line-height: 1.5; padding-left: 1.2rem;'>
+                                    <ol style='color: #334155; font-size: 0.95rem; line-height: 1.5; padding-left: 1.2rem;'>
                                         {steps_html}
-                                    </ul>
+                                    </ol>
                                 </div>
                                 """,
                                 unsafe_allow_html=True
@@ -4574,7 +4501,7 @@ with tab_ml_predict:
                             st.info("Additional strategic insights will appear here when identified.")
                         else:
                             # Synced secondary toggle for better UX
-                            col_msg_t, col_msg_txt = st.columns([0.25, 1])
+                            col_msg_t, col_msg_txt = st.columns([0.6, 1])
                             with col_msg_t:
                                 st.toggle(
                                     "Use Smart AI Analysis",
@@ -4582,7 +4509,7 @@ with tab_ml_predict:
                                     key="_smart_ai_toggle_assistant",
                                     help=help_text,
                                     on_change=sync_assistant_toggle,
-                                    label_visibility="collapsed"
+                                    label_visibility="visible"
                                 )
                             with col_msg_txt:
                                 st.warning("Enable **Smart AI Analysis** to unlock recommendations.")
