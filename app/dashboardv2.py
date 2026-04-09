@@ -1455,7 +1455,7 @@ def render_wordcloud(text_series, stopwords, title):
         collocations=False,
     ).generate(text)
     st.write(title)
-    st.image(wc.to_array(), use_container_width=True)
+    st.image(wc.to_array(), width="stretch")
 
 st.markdown(
     """
@@ -1516,7 +1516,7 @@ with st.sidebar:
             if fixed_end_date > month_starts[-1]:
                 fixed_end_date = month_starts[-1]
 
-            if st.button("↺ Reset", key="reset_date", use_container_width=True):
+            if st.button("↺ Reset", key="reset_date", width="stretch"):
                 st.session_state["date_range_slider"] = (fixed_start_date, fixed_end_date)
 
             stored_range = st.session_state.get("date_range_slider")
@@ -1608,7 +1608,7 @@ with st.sidebar:
         button_label = "Deselect All" if all_selected else "Select All"
         button_help = "Uncheck all columns" if all_selected else "Check all columns"
         
-        if st.button(button_label, key="toggle_all", use_container_width=True, help=button_help):
+        if st.button(button_label, key="toggle_all", width="stretch", help=button_help):
             if all_selected:
                 st.session_state.selected_columns = []
                 # Update all checkbox states to unchecked
@@ -1660,7 +1660,7 @@ with download_container:
         data=to_csv_bytes(download_df),
         file_name="sia_reviews_filtered.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
         type="primary",
         help=f"Export {len(filtered):,} reviews with {col_count} selected columns",
     )
@@ -1975,7 +1975,7 @@ with tab_export:
         recommendation_df = build_download_recommendations(filtered)
         st.dataframe(
             recommendation_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1988,7 +1988,7 @@ with tab_export:
     dict_df = build_data_dictionary(df)
     st.dataframe(
         dict_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "#": st.column_config.NumberColumn(width="small"),
@@ -2032,7 +2032,7 @@ with tab_export:
         sample_df = base_df.iloc[start_idx:end_row]
     st.dataframe(
         sample_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -2071,7 +2071,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(volume_chart, use_container_width=True)
+        st.altair_chart(volume_chart, width="stretch")
 
     with trend_cols[1]:
         rating_trend_chart = (
@@ -2087,7 +2087,7 @@ with tab_overview:
             )
             .properties(height=280)
         )
-        st.altair_chart(rating_trend_chart, use_container_width=True)
+        st.altair_chart(rating_trend_chart, width="stretch")
 
     st.subheader("Ratings & sentiment", help="**The Discrepancy Signal:** Compare user-given stars (top) with AI-detected emotional polarity (bottom). High star ratings with low sentiment often reveal 'polite but frustrated' customers who are at high risk of attrition.")
 
@@ -2178,7 +2178,7 @@ with tab_overview:
             )
         )
 
-        st.altair_chart(rating_base + rating_text_inside_halo + rating_text_inside + rating_text_outside, use_container_width=True)
+        st.altair_chart(rating_base + rating_text_inside_halo + rating_text_inside + rating_text_outside, width="stretch")
 
     with dist_cols[1]:
         pos_f = filtered[filtered["llm_sentiment_score"] > 0.05]
@@ -2281,7 +2281,7 @@ with tab_overview:
             )
         )
 
-        st.altair_chart(base_sent_chart + sent_text_inside_halo + sent_text_inside + sent_text_outside, use_container_width=True)
+        st.altair_chart(base_sent_chart + sent_text_inside_halo + sent_text_inside + sent_text_outside, width="stretch")
         # Center the caption within the Sentiment column
         _, cap_row_col, _ = st.columns([1, 8, 1])
         with cap_row_col:
@@ -2364,7 +2364,7 @@ with tab_overview:
                 )
             )
 
-            st.altair_chart(eng_base + eng_text_inside_halo + eng_text_inside, use_container_width=True)
+            st.altair_chart(eng_base + eng_text_inside_halo + eng_text_inside, width="stretch")
         else:
             # Full Distribution mode: Enhanced Box Plot with Rating-Adaptive Colors
             eng_base = (
@@ -2411,7 +2411,7 @@ with tab_overview:
                 )
             )
             
-            st.altair_chart(eng_base + eng_overlay, use_container_width=True)
+            st.altair_chart(eng_base + eng_overlay, width="stretch")
 
     st.subheader("Where reviews come from", help="**Platform Bias Analysis:** Identify which review sites are driving your reputation. Different platforms attract different demographics; high TripAdvisor volume often correlates with premium leisure travel.")
     st.caption("Compare review volume and average ratings across different platforms.")
@@ -2514,7 +2514,7 @@ with tab_overview:
             )
         )
 
-        st.altair_chart(platform_volume_base + vol_text_inside_halo + vol_text_inside + vol_text_outside, use_container_width=True)
+        st.altair_chart(platform_volume_base + vol_text_inside_halo + vol_text_inside + vol_text_outside, width="stretch")
 
     with platform_cols[1]:
         platform_avg = (
@@ -2596,7 +2596,7 @@ with tab_overview:
             )
         )
 
-        st.altair_chart(platform_avg_base + avg_text_inside_halo + avg_text_inside + avg_text_outside, use_container_width=True)
+        st.altair_chart(platform_avg_base + avg_text_inside_halo + avg_text_inside + avg_text_outside, width="stretch")
 
     # --- MIGRATED CHART: DEVICE BY RATING ---
     # Collapsed by default to maintain executive density
@@ -2675,7 +2675,7 @@ with tab_overview:
                 )
             )
 
-            st.altair_chart(device_bars + device_labels_halo + device_labels, use_container_width=True)
+            st.altair_chart(device_bars + device_labels_halo + device_labels, width="stretch")
         else:
             st.info("No Desktop/Mobile device data available.")
 
@@ -2790,7 +2790,7 @@ with tab_overview:
             )
         )
         
-        st.altair_chart(pm_eda_bars + pm_eda_text_halo + pm_eda_text_inside, use_container_width=True)
+        st.altair_chart(pm_eda_bars + pm_eda_text_halo + pm_eda_text_inside, width="stretch")
         
         st.caption("ℹ️ **Footnote: What are Pain Points (has_negative_dealbreaker)?**")
         st.caption("This stacked view shows the ratio of 'Clean' reviews vs. those with significant Pain Points. "
@@ -2841,7 +2841,7 @@ with tab_overview:
             .encode(x="x:Q", y="y:Q", text="text:N")
         )
         
-        st.altair_chart(scatter_chart + rule_x + rule_y + labels_chart, use_container_width=True)
+        st.altair_chart(scatter_chart + rule_x + rule_y + labels_chart, width="stretch")
 
         st.caption("ℹ️ **Footnote: How to read the Sentiment Agreement Map?**")
         st.caption("The quadrants reveal where traditional lexical rules (VADER) and advanced context-aware AI (LLM) align or diverge:")
@@ -2883,7 +2883,7 @@ with tab_overview:
                 )
                 .properties(height=280)
             )
-            st.altair_chart(helpful_rating_chart, use_container_width=True)
+            st.altair_chart(helpful_rating_chart, width="stretch")
 
         with helpful_cols[1]:
             helpful_length_chart = (
@@ -2904,7 +2904,7 @@ with tab_overview:
                 "text_length",
                 "helpful_votes",
             ).mark_line(color="#1f77b4")
-            st.altair_chart(helpful_length_chart + helpful_trend, use_container_width=True)
+            st.altair_chart(helpful_length_chart + helpful_trend, width="stretch")
 
         st.subheader("Keyword clouds", help="**Visual Vocabulary:** A quick glance at the most frequent nouns and adjectives used by your customers to describe their experience.")
         st.caption("Discover the most frequently mentioned words in positive and negative reviews.")
@@ -2969,7 +2969,7 @@ with tab_explore:
     preset_selected = None
     for idx, (preset_name, x, y, agg) in enumerate(presets):
         with preset_cols[idx % 3]:
-            if st.button(preset_name, use_container_width=True, help=f"Explore {preset_name.lower()}"):
+            if st.button(preset_name, width="stretch", help=f"Explore {preset_name.lower()}"):
                 preset_selected = (x, y, agg)
                 st.session_state.preset_choice = preset_selected
     
@@ -3082,7 +3082,7 @@ with tab_explore:
     chart = chart.add_params(selection)
     
     # Conditional logic for different charts (Scatter/Box Plot handled above)
-    event_data = st.altair_chart(chart, use_container_width=True, on_select="rerun", key="exploration_drilldown")
+    event_data = st.altair_chart(chart, width="stretch", on_select="rerun", key="exploration_drilldown")
     
     st.markdown(generate_chart_insight(filtered, x_col, y_col, agg_label))
     
@@ -3096,7 +3096,7 @@ with tab_explore:
 
     ai_insight_col1, ai_insight_col2 = st.columns([1, 2.5])
     with ai_insight_col1:
-        if st.button("✨ Generate AI Insights", use_container_width=True, help="Generate a context-aware insight based on current data. This consumes API credits."):
+        if st.button("✨ Generate AI Insights", width="stretch", help="Generate a context-aware insight based on current data. This consumes API credits."):
             with st.spinner("Analyzing data patterns..."):
                 selected_model = st.session_state.get("selected_ai_model", "auto")
                 st.session_state["exploration_insight"] = generate_ai_insight(filtered, x_col, y_col, agg_label, selected_model)
@@ -3200,7 +3200,7 @@ with tab_explore:
             
             st.dataframe(
                 drill_df[final_audit_cols].sort_values(by='sarcasm_delta', ascending=False),
-                use_container_width=True,
+                width="stretch",
                 height=500
             )
         else:
@@ -3258,7 +3258,7 @@ with tab_explore:
         with insight_cols[1]:
             st.write("")
             st.write("")
-            run_engine = st.button("🚀 Execute Engine", type="primary", use_container_width=True)
+            run_engine = st.button("🚀 Execute Engine", type="primary", width="stretch")
 
         if run_engine or st.session_state.get("trigger_macro_engine", False):
             st.session_state["trigger_macro_engine"] = False # Reset so it does not loop
@@ -3500,7 +3500,7 @@ with tab_explore:
                                 coloraxis_showscale=False,
                                 font_family="Inter, system-ui, sans-serif"
                             )
-                            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                            st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})
                         else:
                             st.info("Insufficient aspect data for matrix.")
 
@@ -3527,7 +3527,7 @@ with tab_explore:
                             fill='none', stroke='#ef4444', strokeWidth=3, opacity=0.6
                         ).encode(x='x:O', y='y:N')
                         
-                        st.altair_chart(heatmap + gap_box, use_container_width=True)
+                        st.altair_chart(heatmap + gap_box, width="stretch")
 
                     # --- 4. HIGH RISK DRILL DOWN ---
                     if len(high_risk) > 0:
@@ -3543,7 +3543,7 @@ with tab_explore:
                     st.divider()
                     with st.expander("📝 Full Batch Processed Data", expanded=False):
                         display_df = results_df.drop(columns=['_engine_tags'])
-                        st.dataframe(display_df, use_container_width=True)
+                        st.dataframe(display_df, width="stretch")
 
 
 models = load_ml_models(model_dir=current_model_path)
@@ -3682,14 +3682,14 @@ with tab_ml_predict:
                 is_analyzed = st.session_state.get("review_analyzed", False)
                 # Only "light up" green if there is text AND we haven't analyzed it yet
                 show_active = is_ready and not is_analyzed
-                if st.button("Analyze Review ↑", type="primary" if show_active else "secondary", use_container_width=True, key="main_analyze_btn"):
+                if st.button("Analyze Review ↑", type="primary" if show_active else "secondary", width="stretch", key="main_analyze_btn"):
                     st.session_state["review_analyzed"] = True
                     st.rerun()
 
             # --- INSTANT RESPONSE SCRIPT ---
             # This JS monitors the textarea directly in the browser to "light up" the button 
             # instantly without waiting for a Streamlit rerun.
-            st.components.v1.html(
+            st.components.v1.iframe(
                 """
                 <script>
                 const doc = window.parent.document;
@@ -3799,21 +3799,21 @@ with tab_ml_predict:
             with preset_cols[1]:
                 st.button(
                     "1★ Severe service failure",
-                    use_container_width=True,
+                    width="stretch",
                     on_click=_apply_sample_review,
                     args=(sample_reviews["1_star"],),
                 )
             with preset_cols[2]:
                 st.button(
                     "2.5★ Mixed experience",
-                    use_container_width=True,
+                    width="stretch",
                     on_click=_apply_sample_review,
                     args=(sample_reviews["2_5_star"],),
                 )
             with preset_cols[3]:
                 st.button(
                     "5★ Excellent journey",
-                    use_container_width=True,
+                    width="stretch",
                     on_click=_apply_sample_review,
                     args=(sample_reviews["5_star"],),
                 )
@@ -4060,7 +4060,7 @@ with tab_ml_predict:
                 with st_cols_engine[1]:
                     if is_ai_fallback:
                         # Custom styling to make the button height match the status badge
-                        if st.button("↻ Reload", key="reload_ai_service", help="Attempt to reconnect to the AI service (Groq/Ollama)", use_container_width=True):
+                        if st.button("↻ Reload", key="reload_ai_service", help="Attempt to reconnect to the AI service (Groq/Ollama)", width="stretch"):
                             st.rerun()
                     else:
                         pass
@@ -4298,7 +4298,7 @@ with tab_ml_predict:
                                 ],
                             )
                         )
-                        st.altair_chart(sent_chart + sent_text_inside_halo + sent_text_inside + sent_text_outside, use_container_width=True)
+                        st.altair_chart(sent_chart + sent_text_inside_halo + sent_text_inside + sent_text_outside, width="stretch")
                         
                         # Center the caption below the chart (Diagnostic Sync)
                         _, cap_col, _ = st.columns([1, 8, 1])
@@ -4367,7 +4367,7 @@ with tab_ml_predict:
                                 text=alt.Text("Display:N"),
                             )
                         )
-                        st.altair_chart(drivers_chart + drivers_text_inside + drivers_text_outside, use_container_width=True)
+                        st.altair_chart(drivers_chart + drivers_text_inside + drivers_text_outside, width="stretch")
 
 
                 
