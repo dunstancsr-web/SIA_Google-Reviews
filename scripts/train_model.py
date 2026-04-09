@@ -24,7 +24,7 @@ nltk.data.path.append('./nltk_data')
 nltk.download('vader_lexicon', download_dir='./nltk_data', quiet=True)
 nltk.download('stopwords', download_dir='./nltk_data', quiet=True)
 
-from utils import clean_text, get_vader_min, has_dealbreaker
+from app.utils import clean_text, get_vader_min, has_dealbreaker
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 

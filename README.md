@@ -4,7 +4,7 @@ emoji: ✈️
 colorFrom: blue
 colorTo: yellow
 sdk: streamlit
-app_file: dashboardv2.py
+app_file: app/dashboardv2.py
 pinned: false
 ---
 > **Note to self:** The block above is for Hugging Face settings. 
@@ -12,7 +12,7 @@ pinned: false
 
 
 # To open file in local host, type the following in the terminal:
-python -m streamlit run dashboardv2.py
+python -m streamlit run app/dashboardv2.py
 
 # Singapore Airlines Review Dashboard
 
@@ -120,7 +120,7 @@ App auto-detects Ollama and uses it for AI insights. If both Groq and Ollama are
 2. **Deploy to Streamlit Cloud**:
    - Go to https://share.streamlit.io
    - Click "New app" → Select your repo, branch, and main file
-   - Enter `dashboardv2.py` as the main file path
+   - Enter `app/dashboardv2.py` as the main file path
 
 3. **Add Groq API Secret**:
    - In Streamlit Cloud app settings (⋮ menu), select "Secrets"
@@ -191,4 +191,4 @@ For issues, check the code comments or consult:
 
 
 # To open file in local host, type the following in the terminal:
-python -m streamlit run dashboardv2.py
+python -m streamlit run app/dashboardv2.py

@@ -1792,7 +1792,7 @@ def extract_aspect_tags(text, use_llm=True):
 
                 # DIAGNOSTIC LOGGING: Save the raw LLM output for developer inspection
                 try:
-                    with open("llm_synthesis_debug.json", "w", encoding="utf-8") as debug_file:
+                    with open("logs/llm_synthesis_debug.json", "w", encoding="utf-8") as debug_file:
                         debug_file.write(llm_out)
                 except:
                     pass

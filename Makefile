@@ -1,5 +1,5 @@
 PYTHON := .venv/bin/python
-APP := dashboardv2.py
+APP := app/dashboardv2.py
 PORT := 8501
 HOST := 127.0.0.1
 

@@ -17,7 +17,7 @@ SAVE_INTERVAL = 10  # Reduced for the 100-review test batch
 TEST_LIMIT = 100    # Added to handle the user's specific request
 
 # --- NLP INITIALIZATION ---
-from utils import clean_text as clean_text_local, get_vader_min, has_dealbreaker as has_db, get_llm_sentiment
+from app.utils import clean_text as clean_text_local, get_vader_min, has_dealbreaker as has_db, get_llm_sentiment
 
 # --- ENGINE HELPER IMPORTS COMPLETED ---
 
