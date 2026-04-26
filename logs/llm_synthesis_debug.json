@@ -1,22 +1,32 @@
 {
-"suggested_response": "Thank you for your wonderful review! We're thrilled that our economy class seats exceeded your expectations. Your kind words will be shared with our cabin crew leadership team. We're also glad to hear that our breakfast service and inflight entertainment options met your needs. We'd love to have you fly with us again soon!",
-"strategic_steps": ["Notify Cabin Crew Leadership team about excellent staff service", "Share positive review with In-flight Catering team", "Forward feedback on seat comfort and breakfast quality"],
-"overall_sentiment_score": 0.9,
+"suggested_response": "Dear valued customer, we're sorry to hear that your recent flight with us didn't meet your expectations. We'll be reaching out to our Cabin Crew leadership and In-flight Catering team to investigate the issues you faced with boarding, entertainment, and food. We will be reaching out to you via private message to gather more details so that we can investigate this matter thoroughly and improve our services.",
+"strategic_steps": ["Reach out to Cabin Crew leadership", "Notify In-flight Catering team", "Private message customer for more information"],
+"overall_sentiment_score": -0.75,
 "segment_tagging_results": [
 {
 "id": 0,
-"topics": ["Seat & Comfort"],
-"sentiment": "Positive"
+"topics": ["Food & Beverage"],
+"sentiment": "Negative"
 },
 {
 "id": 1,
-"topics": ["Food & Beverage"],
-"sentiment": "Positive"
+"topics": ["Seat & Comfort"],
+"sentiment": "Neutral"
 },
 {
 "id": 2,
 "topics": ["Staff & Service"],
 "sentiment": "Positive"
+},
+{
+"id": 3,
+"topics": ["Flight Punctuality"],
+"sentiment": "Negative"
+},
+{
+"id": 4,
+"topics": ["Inflight Entertainment"],
+"sentiment": "Negative"
 }
 ]
 }
